@@ -73,6 +73,7 @@
 #include "mjpeg_encoder.h"
 #include "red_memslots.h"
 #include "red_parse_qxl.h"
+#include "red_record_qxl.h"
 #include "jpeg_encoder.h"
 #include "demarshallers.h"
 #include "zlib_encoder.h"
@@ -1020,6 +1021,9 @@ typedef struct RedWorker {
 
     int driver_cap_monitors_config;
     int set_client_capabilities_pending;
+
+    FILE *record_fd;
+    clockid_t record_clock_id;
 } RedWorker;
 
 typedef enum {
@@ -4979,6 +4983,44 @@ static RedDrawable *red_drawable_new(void)
     return red;
 }
 
+static void red_record_event(RedWorker *worker, int what, uint32_t type)
+{
+    struct timespec ts;
+    static int counter = 0;
+
+    // TODO: record the size of the packet in the header. This would make
+    // navigating it much faster (well, I can add an index while I'm at it..)
+    // and make it trivial to get a histogram from a file.
+    // But to implement that I would need some temporary buffer for each event.
+    // (that can be up to VGA_FRAMEBUFFER large)
+    clock_gettime(worker->record_clock_id, &ts);
+    fprintf(worker->record_fd, "event %d %d %d %ld\n", counter++, what, type,
+        ts.tv_nsec + ts.tv_sec * 1000 * 1000 * 1000);
+}
+
+static void red_record_command(RedWorker *worker, QXLCommandExt ext_cmd)
+{
+    red_record_event(worker, 0, ext_cmd.cmd.type);
+    switch (ext_cmd.cmd.type) {
+    case QXL_CMD_DRAW:
+        red_record_drawable(worker->record_fd, &worker->mem_slots, ext_cmd.group_id,
+                            ext_cmd.cmd.data, ext_cmd.flags);
+        break;
+    case QXL_CMD_UPDATE:
+        red_record_update_cmd(worker->record_fd, &worker->mem_slots, ext_cmd.group_id,
+                           ext_cmd.cmd.data);
+        break;
+    case QXL_CMD_MESSAGE:
+        red_record_message(worker->record_fd, &worker->mem_slots, ext_cmd.group_id,
+                           ext_cmd.cmd.data);
+        break;
+    case QXL_CMD_SURFACE:
+        red_record_surface_cmd(worker->record_fd, &worker->mem_slots, ext_cmd.group_id,
+                               ext_cmd.cmd.data);
+        break;
+    }
+}
+
 static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *ring_is_empty)
 {
     QXLCommandExt ext_cmd;
@@ -5008,6 +5050,9 @@ static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *
                 break;
             }
             continue;
+        }
+        if (worker->record_fd) {
+            red_record_command(worker, ext_cmd);
         }
         stat_inc_counter(worker->command_counter, 1);
         worker->repoll_cmd_ring = 0;
@@ -11158,6 +11203,11 @@ static void dev_create_primary_surface(RedWorker *worker, uint32_t surface_id,
         line_0 -= (int32_t)(surface.stride * (surface.height -1));
     }
 
+    if (worker->record_fd) {
+        red_record_dev_input_primary_surface_create(worker->record_fd,
+                    &surface, line_0);
+    }
+
     red_create_surface(worker, 0, surface.width, surface.height, surface.stride, surface.format,
                        line_0, surface.flags & QXL_SURF_FLAG_KEEP_DATA, TRUE);
     set_monitors_config_to_primary(worker);
@@ -11695,11 +11745,21 @@ static void worker_handle_dispatcher_async_done(void *opaque,
     red_dispatcher_async_complete(worker->red_dispatcher, msg_async->cmd);
 }
 
-static void register_callbacks(Dispatcher *dispatcher)
+static void worker_dispatcher_record(void *opaque, uint32_t message_type, void *payload)
 {
-    dispatcher_register_async_done_callback(
-                                    dispatcher,
-                                    worker_handle_dispatcher_async_done);
+    RedWorker *worker = opaque;
+
+    if (worker->record_fd) {
+        red_record_event(worker, 1, message_type);
+    }
+}
+
+static void worker_dispatcher_register(RedWorker *worker, Dispatcher *dispatcher)
+{
+    dispatcher_register_extra_handler(dispatcher, worker_dispatcher_record);
+    dispatcher_register_async_done_callback(dispatcher,
+                                            worker_handle_dispatcher_async_done);
+
     dispatcher_register_handler(dispatcher,
                                 RED_WORKER_MESSAGE_DISPLAY_CONNECT,
                                 handle_dev_display_connect,
@@ -11891,17 +11951,32 @@ static void red_init(RedWorker *worker, WorkerInitData *init_data)
     RedWorkerMessage message;
     Dispatcher *dispatcher;
     int i;
-
+    const char *record_filename;
     spice_assert(sizeof(CursorItem) <= QXL_CURSUR_DEVICE_DATA_SIZE);
 
     memset(worker, 0, sizeof(RedWorker));
+    record_filename = getenv("SPICE_WORKER_RECORD_FILENAME");
+    if (record_filename) {
+        static const char *header = "SPICE_REPLAY 1\n";
+
+        worker->record_fd = fopen(record_filename, "w+");
+        if (worker->record_fd == NULL) {
+            spice_error("failed to open recording file %s\n", record_filename);
+        }
+        if (pthread_getcpuclockid(pthread_self(), &worker->record_clock_id)) {
+            spice_error("pthread_getcpuclockid failed");
+        }
+	if (fwrite(header, sizeof(header), 1, worker->record_fd) != 1) {
+            spice_error("failed to write replay header");
+        }
+    }
     dispatcher = red_dispatcher_get_dispatcher(init_data->red_dispatcher);
     dispatcher_set_opaque(dispatcher, worker);
     worker->red_dispatcher = init_data->red_dispatcher;
     worker->qxl = init_data->qxl;
     worker->id = init_data->id;
     worker->channel = dispatcher_get_recv_fd(dispatcher);
-    register_callbacks(dispatcher);
+    worker_dispatcher_register(worker, dispatcher);
     worker->pending = init_data->pending;
     worker->cursor_visible = TRUE;
     spice_assert(init_data->num_renderers > 0);
@@ -11958,6 +12033,7 @@ static void red_init(RedWorker *worker, WorkerInitData *init_data)
     message = RED_WORKER_MESSAGE_READY;
     write_message(worker->channel, &message);
 }
+
 
 static void red_display_cc_free_glz_drawables(RedChannelClient *rcc)
 {
