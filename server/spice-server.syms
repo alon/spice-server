@@ -112,6 +112,8 @@ global:
 SPICE_SERVER_0.10.3 {
 global:
     spice_server_is_server_mouse;
+    replay_next_cmd;
+    replay_from_fd;
 } SPICE_SERVER_0.10.2;
 
 SPICE_SERVER_0.10.4 {
@@ -152,4 +154,9 @@ global:
     spice_server_set_playback_rate;
     spice_server_get_best_record_rate;
     spice_server_set_record_rate;
+
+    spice_replay_free;
+    spice_replay_new;
+    spice_replay_next_cmd;
+    spice_replay_free_cmd;
 } SPICE_SERVER_0.12.4;
