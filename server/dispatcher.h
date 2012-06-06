@@ -6,6 +6,7 @@
 typedef struct Dispatcher Dispatcher;
 
 typedef void (*dispatcher_handle_message)(void *opaque,
+                                          uint32_t message_type,
                                           void *payload);
 
 typedef void (*dispatcher_handle_async_done)(void *opaque,

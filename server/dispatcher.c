@@ -136,7 +136,7 @@ static int dispatcher_handle_single_read(Dispatcher *dispatcher)
         return 0;
     }
     if (msg->handler) {
-        msg->handler(dispatcher->opaque, (void *)payload);
+        msg->handler(dispatcher->opaque, type, (void *)payload);
     } else {
         spice_printerr("error: no handler for message type %d", type);
     }

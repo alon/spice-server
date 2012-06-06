@@ -10830,7 +10830,7 @@ static void surface_dirty_region_to_rects(RedSurface *surface,
     free(dirty_rects);
 }
 
-void handle_dev_update_async(void *opaque, void *payload)
+void handle_dev_update_async(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
     RedWorkerMessageUpdateAsync *msg = payload;
@@ -10865,7 +10865,7 @@ void handle_dev_update_async(void *opaque, void *payload)
     free(qxl_dirty_rects);
 }
 
-void handle_dev_update(void *opaque, void *payload)
+void handle_dev_update(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
     RedWorkerMessageUpdate *msg = payload;
@@ -10901,7 +10901,7 @@ static void dev_add_memslot(RedWorker *worker, QXLDevMemSlot mem_slot)
                               mem_slot.generation);
 }
 
-void handle_dev_add_memslot(void *opaque, void *payload)
+void handle_dev_add_memslot(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
     RedWorkerMessageAddMemslot *msg = payload;
@@ -10912,7 +10912,7 @@ void handle_dev_add_memslot(void *opaque, void *payload)
                               mem_slot.generation);
 }
 
-void handle_dev_del_memslot(void *opaque, void *payload)
+void handle_dev_del_memslot(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
     RedWorkerMessageDelMemslot *msg = payload;
@@ -10949,7 +10949,7 @@ static void dev_destroy_surface_wait(RedWorker *worker, uint32_t surface_id)
     }
 }
 
-void handle_dev_destroy_surface_wait(void *opaque, void *payload)
+void handle_dev_destroy_surface_wait(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageDestroySurfaceWait *msg = payload;
     RedWorker *worker = opaque;
@@ -11024,7 +11024,7 @@ static inline void dev_destroy_surfaces(RedWorker *worker)
     red_cursor_reset(worker);
 }
 
-void handle_dev_destroy_surfaces(void *opaque, void *payload)
+void handle_dev_destroy_surfaces(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
 
@@ -11179,7 +11179,7 @@ static void dev_create_primary_surface(RedWorker *worker, uint32_t surface_id,
     }
 }
 
-void handle_dev_create_primary_surface(void *opaque, void *payload)
+void handle_dev_create_primary_surface(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageCreatePrimarySurface *msg = payload;
     RedWorker *worker = opaque;
@@ -11207,7 +11207,7 @@ static void dev_destroy_primary_surface(RedWorker *worker, uint32_t surface_id)
     red_cursor_reset(worker);
 }
 
-void handle_dev_destroy_primary_surface(void *opaque, void *payload)
+void handle_dev_destroy_primary_surface(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageDestroyPrimarySurface *msg = payload;
     RedWorker *worker = opaque;
@@ -11216,7 +11216,7 @@ void handle_dev_destroy_primary_surface(void *opaque, void *payload)
     dev_destroy_primary_surface(worker, surface_id);
 }
 
-void handle_dev_destroy_primary_surface_async(void *opaque, void *payload)
+void handle_dev_destroy_primary_surface_async(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageDestroyPrimarySurfaceAsync *msg = payload;
     RedWorker *worker = opaque;
@@ -11242,21 +11242,21 @@ static void dev_flush_surfaces(RedWorker *worker)
     flush_all_surfaces(worker);
 }
 
-void handle_dev_flush_surfaces(void *opaque, void *payload)
+void handle_dev_flush_surfaces(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
 
     dev_flush_surfaces(worker);
 }
 
-void handle_dev_flush_surfaces_async(void *opaque, void *payload)
+void handle_dev_flush_surfaces_async(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
 
     dev_flush_surfaces(worker);
 }
 
-void handle_dev_stop(void *opaque, void *payload)
+void handle_dev_stop(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
 
@@ -11313,7 +11313,7 @@ static int display_channel_wait_for_migrate_data(DisplayChannel *display)
     return FALSE;
 }
 
-void handle_dev_start(void *opaque, void *payload)
+void handle_dev_start(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
 
@@ -11331,7 +11331,7 @@ void handle_dev_start(void *opaque, void *payload)
     guest_set_client_capabilities(worker);
 }
 
-void handle_dev_wakeup(void *opaque, void *payload)
+void handle_dev_wakeup(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
 
@@ -11339,7 +11339,7 @@ void handle_dev_wakeup(void *opaque, void *payload)
     stat_inc_counter(worker->wakeup_counter, 1);
 }
 
-void handle_dev_oom(void *opaque, void *payload)
+void handle_dev_oom(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
 
@@ -11372,17 +11372,17 @@ void handle_dev_oom(void *opaque, void *payload)
     clear_bit(RED_WORKER_PENDING_OOM, worker->pending);
 }
 
-void handle_dev_reset_cursor(void *opaque, void *payload)
+void handle_dev_reset_cursor(void *opaque, uint32_t message_type, void *payload)
 {
     red_cursor_reset((RedWorker *)opaque);
 }
 
-void handle_dev_reset_image_cache(void *opaque, void *payload)
+void handle_dev_reset_image_cache(void *opaque, uint32_t message_type, void *payload)
 {
     image_cache_reset(&((RedWorker *)opaque)->image_cache);
 }
 
-void handle_dev_destroy_surface_wait_async(void *opaque, void *payload)
+void handle_dev_destroy_surface_wait_async(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageDestroySurfaceWaitAsync *msg = payload;
     RedWorker *worker = opaque;
@@ -11390,14 +11390,14 @@ void handle_dev_destroy_surface_wait_async(void *opaque, void *payload)
     dev_destroy_surface_wait(worker, msg->surface_id);
 }
 
-void handle_dev_destroy_surfaces_async(void *opaque, void *payload)
+void handle_dev_destroy_surfaces_async(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
 
     dev_destroy_surfaces(worker);
 }
 
-void handle_dev_create_primary_surface_async(void *opaque, void *payload)
+void handle_dev_create_primary_surface_async(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageCreatePrimarySurfaceAsync *msg = payload;
     RedWorker *worker = opaque;
@@ -11411,7 +11411,7 @@ void handle_dev_create_primary_surface_async(void *opaque, void *payload)
  * pthread is created, since the channel duration is the lifetime of the spice
  * server. */
 
-void handle_dev_display_channel_create(void *opaque, void *payload)
+void handle_dev_display_channel_create(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
 
@@ -11422,7 +11422,7 @@ void handle_dev_display_channel_create(void *opaque, void *payload)
     xwrite(worker->channel, &red_channel, sizeof(RedChannel *));
 }
 
-void handle_dev_display_connect(void *opaque, void *payload)
+void handle_dev_display_connect(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageDisplayConnect *msg = payload;
     RedWorker *worker = opaque;
@@ -11438,7 +11438,7 @@ void handle_dev_display_connect(void *opaque, void *payload)
     free(msg->common_caps);
 }
 
-void handle_dev_display_disconnect(void *opaque, void *payload)
+void handle_dev_display_disconnect(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageDisplayDisconnect *msg = payload;
     RedChannelClient *rcc = msg->rcc;
@@ -11452,7 +11452,7 @@ void handle_dev_display_disconnect(void *opaque, void *payload)
     red_channel_client_disconnect(rcc);
 }
 
-void handle_dev_display_migrate(void *opaque, void *payload)
+void handle_dev_display_migrate(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageDisplayMigrate *msg = payload;
     RedWorker *worker = opaque;
@@ -11463,7 +11463,9 @@ void handle_dev_display_migrate(void *opaque, void *payload)
     red_migrate_display(worker, rcc);
 }
 
-static void handle_dev_monitors_config_async(void *opaque, void *payload)
+static void handle_dev_monitors_config_async(void *opaque,
+                                             uint32_t message_type,
+                                             void *payload)
 {
     RedWorkerMessageMonitorsConfigAsync *msg = payload;
     RedWorker *worker = opaque;
@@ -11494,7 +11496,7 @@ static void handle_dev_monitors_config_async(void *opaque, void *payload)
 }
 
 /* TODO: special, perhaps use another dispatcher? */
-void handle_dev_cursor_channel_create(void *opaque, void *payload)
+void handle_dev_cursor_channel_create(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
     RedChannel *red_channel;
@@ -11505,7 +11507,7 @@ void handle_dev_cursor_channel_create(void *opaque, void *payload)
     xwrite(worker->channel, &red_channel, sizeof(RedChannel *));
 }
 
-void handle_dev_cursor_connect(void *opaque, void *payload)
+void handle_dev_cursor_connect(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageCursorConnect *msg = payload;
     RedWorker *worker = opaque;
@@ -11521,7 +11523,7 @@ void handle_dev_cursor_connect(void *opaque, void *payload)
     free(msg->common_caps);
 }
 
-void handle_dev_cursor_disconnect(void *opaque, void *payload)
+void handle_dev_cursor_disconnect(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageCursorDisconnect *msg = payload;
     RedChannelClient *rcc = msg->rcc;
@@ -11531,7 +11533,7 @@ void handle_dev_cursor_disconnect(void *opaque, void *payload)
     red_channel_client_disconnect(rcc);
 }
 
-void handle_dev_cursor_migrate(void *opaque, void *payload)
+void handle_dev_cursor_migrate(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageCursorMigrate *msg = payload;
     RedWorker *worker = opaque;
@@ -11542,7 +11544,7 @@ void handle_dev_cursor_migrate(void *opaque, void *payload)
     red_migrate_cursor(worker, rcc);
 }
 
-void handle_dev_set_compression(void *opaque, void *payload)
+void handle_dev_set_compression(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageSetCompression *msg = payload;
     RedWorker *worker = opaque;
@@ -11583,7 +11585,7 @@ void handle_dev_set_compression(void *opaque, void *payload)
 #endif
 }
 
-void handle_dev_set_streaming_video(void *opaque, void *payload)
+void handle_dev_set_streaming_video(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageSetStreamingVideo *msg = payload;
     RedWorker *worker = opaque;
@@ -11605,7 +11607,7 @@ void handle_dev_set_streaming_video(void *opaque, void *payload)
     }
 }
 
-void handle_dev_set_mouse_mode(void *opaque, void *payload)
+void handle_dev_set_mouse_mode(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageSetMouseMode *msg = payload;
     RedWorker *worker = opaque;
@@ -11614,7 +11616,7 @@ void handle_dev_set_mouse_mode(void *opaque, void *payload)
     spice_info("mouse mode %u", worker->mouse_mode);
 }
 
-void handle_dev_add_memslot_async(void *opaque, void *payload)
+void handle_dev_add_memslot_async(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageAddMemslotAsync *msg = payload;
     RedWorker *worker = opaque;
@@ -11622,14 +11624,14 @@ void handle_dev_add_memslot_async(void *opaque, void *payload)
     dev_add_memslot(worker, msg->mem_slot);
 }
 
-void handle_dev_reset_memslots(void *opaque, void *payload)
+void handle_dev_reset_memslots(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
 
     red_memslot_info_reset(&worker->mem_slots);
 }
 
-void handle_dev_driver_unload(void *opaque, void *payload)
+void handle_dev_driver_unload(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
 
@@ -11665,7 +11667,7 @@ static int loadvm_command(RedWorker *worker, QXLCommandExt *ext)
     return TRUE;
 }
 
-void handle_dev_loadvm_commands(void *opaque, void *payload)
+void handle_dev_loadvm_commands(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageLoadvmCommands *msg = payload;
     RedWorker *worker = opaque;

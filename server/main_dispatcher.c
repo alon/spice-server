@@ -73,6 +73,7 @@ static void main_dispatcher_self_handle_channel_event(
 }
 
 static void main_dispatcher_handle_channel_event(void *opaque,
+                                                 uint32_t message_type,
                                                  void *payload)
 {
     MainDispatcherChannelEventMessage *channel_event = payload;
@@ -97,6 +98,7 @@ void main_dispatcher_channel_event(int event, SpiceChannelEventInfo *info)
 
 
 static void main_dispatcher_handle_migrate_complete(void *opaque,
+                                                    uint32_t message_type,
                                                     void *payload)
 {
     MainDispatcherMigrateSeamlessDstCompleteMessage *mig_complete = payload;
@@ -106,6 +108,7 @@ static void main_dispatcher_handle_migrate_complete(void *opaque,
 }
 
 static void main_dispatcher_handle_mm_time_latency(void *opaque,
+                                                   uint32_t message_type,
                                                    void *payload)
 {
     MainDispatcherMmTimeLatencyMessage *msg = payload;
@@ -114,6 +117,7 @@ static void main_dispatcher_handle_mm_time_latency(void *opaque,
 }
 
 static void main_dispatcher_handle_client_disconnect(void *opaque,
+                                                     uint32_t message_type,
                                                      void *payload)
 {
     MainDispatcherClientDisconnectMessage *msg = payload;
