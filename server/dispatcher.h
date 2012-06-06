@@ -33,6 +33,7 @@ struct Dispatcher {
     size_t payload_size; /* used to track realloc calls */
     void *opaque;
     dispatcher_handle_async_done handle_async_done;
+    dispatcher_handle_message extra_handler;
 };
 
 /*
@@ -84,6 +85,13 @@ void dispatcher_register_handler(Dispatcher *dispatcher, uint32_t message_type,
 void dispatcher_register_async_done_callback(
                                     Dispatcher *dispatcher,
                                     dispatcher_handle_async_done handler);
+
+/*
+ * Hack to allow red_record to see the message being sent so it can record
+ * it to file.
+ */
+void dispatcher_register_extra_handler(Dispatcher *dispatcher,
+                                       dispatcher_handle_message handler);
 
 /*
  *  dispatcher_handle_recv_read
