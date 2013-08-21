@@ -1257,7 +1257,6 @@ static inline int validate_surface(RedWorker *worker, uint32_t surface_id)
         spice_warning("canvas address is %p for %d (and is NULL)\n",
                    &(worker->surfaces[surface_id].context.canvas), surface_id);
         spice_warning("failed on %d", surface_id);
-        spice_warn_if(!worker->surfaces[surface_id].context.canvas);
         return 0;
     }
     return 1;
