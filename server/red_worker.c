@@ -4365,6 +4365,11 @@ static void red_draw_qxl_drawable(RedWorker *worker, Drawable *drawable)
 
     worker->preload_group_id = drawable->group_id;
 
+    if (!canvas) {
+        spice_warning("ignoring drawable to destroyed surface %d\n", drawable->surface_id);
+        return;
+    }
+
     region_add(&surface->draw_dirty_region, &drawable->red_drawable->bbox);
 
     switch (drawable->red_drawable->type) {
