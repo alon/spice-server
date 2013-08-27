@@ -1,6 +1,7 @@
 NULL =
 
 AM_CPPFLAGS =					\
+	$(GLIB2_CFLAGS)				\
 	-I$(top_srcdir)				\
 	-I$(top_srcdir)/common			\
 	-I$(top_srcdir)/server			\
@@ -16,6 +17,7 @@ AM_CPPFLAGS += -DAUTOMATED_TESTS
 endif
 
 LDADD =								\
+	$(GLIB2_LIBS)						\
 	$(top_builddir)/spice-common/common/libspice-common.la	\
 	$(top_builddir)/server/libspice-server.la		\
 	$(GLIB2_LIBS)						\
