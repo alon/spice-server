@@ -1021,7 +1021,7 @@ void red_channel_client_default_migrate(RedChannelClient *rcc)
 }
 
 RedChannel *red_channel_create(int size,
-                               SpiceCoreInterface *core,
+                               const SpiceCoreInterface *core,
                                uint32_t type, uint32_t id,
                                int handle_acks,
                                channel_handle_message_proc handle_message,
@@ -1136,7 +1136,7 @@ static int do_nothing_handle_message(RedChannelClient *rcc,
 }
 
 RedChannel *red_channel_create_parser(int size,
-                               SpiceCoreInterface *core,
+                               const SpiceCoreInterface *core,
                                uint32_t type, uint32_t id,
                                int handle_acks,
                                spice_parse_channel_func_t parser,
