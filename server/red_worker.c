@@ -12032,6 +12032,12 @@ static void red_init(RedWorker *worker, WorkerInitData *init_data)
 
     message = RED_WORKER_MESSAGE_READY;
     write_message(worker->channel, &message);
+
+    red_init_quic(worker);
+    red_init_lz(worker);
+    red_init_jpeg(worker);
+    red_init_zlib(worker);
+    worker->event_timeout = INF_EVENT_WAIT;
 }
 
 
@@ -12057,11 +12063,7 @@ SPICE_GNUC_NORETURN void *red_worker_main(void *arg)
 #endif
 
     red_init(worker, (WorkerInitData *)arg);
-    red_init_quic(worker);
-    red_init_lz(worker);
-    red_init_jpeg(worker);
-    red_init_zlib(worker);
-    worker->event_timeout = INF_EVENT_WAIT;
+
     for (;;) {
         int i, num_events;
         unsigned int timers_queue_timeout;
