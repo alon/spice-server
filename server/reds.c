@@ -3274,6 +3274,46 @@ SPICE_GNUC_VISIBLE SpiceServer *spice_server_new(void)
     return reds;
 }
 
+typedef struct RendererInfo {
+    int id;
+    const char *name;
+} RendererInfo;
+
+static RendererInfo renderers_info[] = {
+    {RED_RENDERER_SW, "sw"},
+#ifdef USE_OPENGL
+    {RED_RENDERER_OGL_PBUF, "oglpbuf"},
+    {RED_RENDERER_OGL_PIXMAP, "oglpixmap"},
+#endif
+    {RED_RENDERER_INVALID, NULL},
+};
+
+uint32_t renderers[RED_RENDERER_LAST];
+uint32_t num_renderers = 0;
+
+static RendererInfo *find_renderer(const char *name)
+{
+    RendererInfo *inf = renderers_info;
+    while (inf->name) {
+        if (strcmp(name, inf->name) == 0) {
+            return inf;
+        }
+        inf++;
+    }
+    return NULL;
+}
+
+static int red_add_renderer(const char *name)
+{
+    RendererInfo *inf;
+
+    if (num_renderers == RED_RENDERER_LAST || !(inf = find_renderer(name))) {
+        return FALSE;
+    }
+    renderers[num_renderers++] = inf->id;
+    return TRUE;
+}
+
 SPICE_GNUC_VISIBLE int spice_server_init(SpiceServer *s, SpiceCoreInterface *core)
 {
     int ret;
@@ -3281,7 +3321,7 @@ SPICE_GNUC_VISIBLE int spice_server_init(SpiceServer *s, SpiceCoreInterface *cor
     spice_assert(reds == s);
     ret = do_spice_init(core);
     if (default_renderer) {
-        red_dispatcher_add_renderer(default_renderer);
+        red_add_renderer(default_renderer);
     }
     return ret;
 }
@@ -3558,7 +3598,7 @@ SPICE_GNUC_VISIBLE int spice_server_is_server_mouse(SpiceServer *s)
 SPICE_GNUC_VISIBLE int spice_server_add_renderer(SpiceServer *s, const char *name)
 {
     spice_assert(reds == s);
-    if (!red_dispatcher_add_renderer(name)) {
+    if (!red_add_renderer(name)) {
         return -1;
     }
     default_renderer = NULL;

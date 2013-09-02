@@ -258,4 +258,11 @@ typedef struct RedWorkerMessageMonitorsConfigAsync {
 typedef struct RedWorkerMessageDriverUnload {
 } RedWorkerMessageDriverUnload;
 
+enum {
+    RED_DISPATCHER_PENDING_WAKEUP,
+    RED_DISPATCHER_PENDING_OOM,
+};
+
+void red_dispatcher_clear_pending(RedDispatcher *red_dispatcher, int pending);
+
 #endif

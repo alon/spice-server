@@ -24,42 +24,9 @@
 #include "red_common.h"
 #include "red_dispatcher.h"
 
-enum {
-    RED_WORKER_PENDING_WAKEUP,
-    RED_WORKER_PENDING_OOM,
-};
-
-enum {
-    RED_RENDERER_INVALID,
-    RED_RENDERER_SW,
-    RED_RENDERER_OGL_PBUF,
-    RED_RENDERER_OGL_PIXMAP,
-
-    RED_RENDERER_LAST
-};
-
 typedef struct RedWorker RedWorker;
 
-typedef struct WorkerInitData {
-    struct QXLInstance *qxl;
-    int id;
-    uint32_t *pending;
-    uint32_t num_renderers;
-    uint32_t renderers[RED_RENDERER_LAST];
-    spice_image_compression_t image_compression;
-    spice_wan_compression_t jpeg_state;
-    spice_wan_compression_t zlib_glz_state;
-    int streaming_video;
-    uint32_t num_memslots;
-    uint32_t num_memslots_groups;
-    uint8_t memslot_gen_bits;
-    uint8_t memslot_id_bits;
-    uint8_t internal_groupslot_id;
-    uint32_t n_surfaces;
-    RedDispatcher *red_dispatcher;
-} WorkerInitData;
-
-RedWorker* red_worker_new(WorkerInitData *init_data);
+RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher);
 bool       red_worker_run(RedWorker *worker);
 
 #endif
