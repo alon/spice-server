@@ -374,7 +374,6 @@ static int inputs_channel_handle_parsed(RedChannelClient *rcc, uint32_t size, ui
     }
     case SPICE_MSGC_INPUTS_MOUSE_POSITION: {
         SpiceMsgcMousePosition *pos = (SpiceMsgcMousePosition *)buf;
-
         if (++icc->motion_count % SPICE_INPUT_MOTION_ACK_BUNCH == 0 &&
             !g_inputs_channel->src_during_migrate) {
             red_channel_client_pipe_add_type(rcc, PIPE_ITEM_MOUSE_MOTION_ACK);

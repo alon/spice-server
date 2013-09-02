@@ -46,6 +46,7 @@
 #include <setjmp.h>
 #include <openssl/ssl.h>
 #include <inttypes.h>
+#include <glib.h>
 
 #include <spice/protocol.h>
 #include <spice/qxl_dev.h>
@@ -82,7 +83,6 @@
 #include "dispatcher.h"
 #include "main_channel.h"
 #include "migration_protocol.h"
-#include "spice_timer_queue.h"
 #include "main_dispatcher.h"
 #include "spice_server_utils.h"
 #include "red_time.h"
@@ -269,13 +269,6 @@ double inline stat_byte_to_mega(uint64_t size)
 #endif
 
 #define MAX_EVENT_SOURCES 20
-#define INF_EVENT_WAIT ~0
-
-struct SpiceWatch {
-    struct RedWorker *worker;
-    SpiceWatchFunc watch_func;
-    void *watch_func_opaque;
-};
 
 enum {
     BUF_TYPE_RAW = 1,
@@ -447,7 +440,7 @@ struct Stream {
     Stream *next;
     RingItem link;
 
-    SpiceTimer *input_fps_timer;
+    guint input_fps_timer;
     uint32_t num_input_frames;
     uint64_t input_fps_timer_start;
     uint32_t input_fps;
@@ -921,6 +914,7 @@ typedef struct ItemTrace {
 #define NUM_CURSORS 100
 
 typedef struct RedWorker {
+    GMainContext *main_context;
     DisplayChannel *display_channel;
     CursorChannel *cursor_channel;
     QXLInstance *qxl;
@@ -930,9 +924,7 @@ typedef struct RedWorker {
     int id;
     int running;
     uint32_t *pending;
-    struct pollfd poll_fds[MAX_EVENT_SOURCES];
-    struct SpiceWatch watches[MAX_EVENT_SOURCES];
-    unsigned int event_timeout;
+    gint timeout;
     uint32_t repoll_cmd_ring;
     uint32_t repoll_cursor_ring;
     uint32_t num_renderers;
@@ -2482,7 +2474,8 @@ static int is_same_drawable(RedWorker *worker, Drawable *d1, Drawable *d2)
 static inline void red_free_stream(RedWorker *worker, Stream *stream)
 {
     if (stream->input_fps_timer) {
-        spice_timer_remove(stream->input_fps_timer);
+        g_source_remove(stream->input_fps_timer);
+        stream->input_fps_timer = 0;
     }
     stream->next = worker->free_streams;
     worker->free_streams = stream;
@@ -3072,22 +3065,22 @@ static void red_display_create_stream(DisplayChannelClient *dcc, Stream *stream)
 #endif
 }
 
-static void red_stream_input_fps_timer_cb(void *opaque)
+static gboolean red_stream_input_fps_timer_cb(void *opaque)
 {
     Stream *stream = opaque;
     uint64_t now = red_now();
     double duration_sec;
 
-    spice_assert(opaque);
-    if (now == stream->input_fps_timer_start) {
-        spice_warning("timer start and expiry time are equal");
-        return;
-    }
+    spice_return_val_if_fail(opaque != NULL, TRUE);
+    spice_return_val_if_fail(now != stream->input_fps_timer_start, TRUE);
+
     duration_sec = (now - stream->input_fps_timer_start)/(1000.0*1000*1000);
     stream->input_fps = stream->num_input_frames / duration_sec;
     spice_debug("input-fps=%u", stream->input_fps);
     stream->num_input_frames = 0;
     stream->input_fps_timer_start = now;
+
+    return TRUE;
 }
 
 static void red_create_stream(RedWorker *worker, Drawable *drawable)
@@ -3116,9 +3109,12 @@ static void red_create_stream(RedWorker *worker, Drawable *drawable)
     SpiceBitmap *bitmap = &drawable->red_drawable->u.copy.src_bitmap->u.bitmap;
     stream->top_down = !!(bitmap->flags & SPICE_BITMAP_FLAGS_TOP_DOWN);
     drawable->stream = stream;
-    stream->input_fps_timer = spice_timer_queue_add(red_stream_input_fps_timer_cb, stream);
-    spice_assert(stream->input_fps_timer);
-    spice_timer_set(stream->input_fps_timer, RED_STREAM_INPUT_FPS_TIMEOUT);
+
+    GSource *source = g_timeout_source_new(RED_STREAM_INPUT_FPS_TIMEOUT);
+    g_source_set_callback(source, red_stream_input_fps_timer_cb, stream, NULL);
+    stream->input_fps_timer = g_source_attach(source, worker->main_context);
+    g_source_unref(source);
+
     stream->num_input_frames = 0;
     stream->input_fps_timer_start = red_now();
     stream->input_fps = MAX_FPS;
@@ -4943,7 +4939,9 @@ static int red_process_cursor(RedWorker *worker, uint32_t max_pipe_size, int *ri
             *ring_is_empty = TRUE;
             if (worker->repoll_cursor_ring < CMD_RING_POLL_RETRIES) {
                 worker->repoll_cursor_ring++;
-                worker->event_timeout = MIN(worker->event_timeout, CMD_RING_POLL_TIMEOUT);
+                worker->timeout = worker->timeout == -1 ?
+                    CMD_RING_POLL_TIMEOUT :
+                    MIN(worker->timeout, CMD_RING_POLL_TIMEOUT);
                 break;
             }
             if (worker->repoll_cursor_ring > CMD_RING_POLL_RETRIES ||
@@ -5025,7 +5023,6 @@ static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *
 {
     QXLCommandExt ext_cmd;
     int n = 0;
-    uint64_t start = red_now();
 
     if (!worker->running) {
         *ring_is_empty = TRUE;
@@ -5034,14 +5031,30 @@ static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *
 
     worker->process_commands_generation++;
     *ring_is_empty = FALSE;
-    while (!display_is_connected(worker) ||
-           // TODO: change to average pipe size?
-           red_channel_min_pipe_size(&worker->display_channel->common.base) <= max_pipe_size) {
+    for (;;) {
+
+        if (display_is_connected(worker)) {
+
+            if (red_channel_all_blocked(&worker->display_channel->common.base)) {
+                spice_info("all display clients are blocking");
+                return n;
+            }
+
+
+            // TODO: change to average pipe size?
+            if (red_channel_min_pipe_size(&worker->display_channel->common.base) > max_pipe_size) {
+                spice_info("too much item in the display clients pipe already");
+                return n;
+            }
+        }
+
         if (!worker->qxl->st->qif->get_command(worker->qxl, &ext_cmd)) {
             *ring_is_empty = TRUE;;
             if (worker->repoll_cmd_ring < CMD_RING_POLL_RETRIES) {
                 worker->repoll_cmd_ring++;
-                worker->event_timeout = MIN(worker->event_timeout, CMD_RING_POLL_TIMEOUT);
+                worker->timeout = worker->timeout == -1 ?
+                    CMD_RING_POLL_TIMEOUT :
+                    MIN(worker->timeout, CMD_RING_POLL_TIMEOUT);
                 break;
             }
             if (worker->repoll_cmd_ring > CMD_RING_POLL_RETRIES ||
@@ -5121,13 +5134,8 @@ static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *
             spice_error("bad command type");
         }
         n++;
-        if ((worker->display_channel &&
-             red_channel_all_blocked(&worker->display_channel->common.base))
-            || red_now() - start > 10 * 1000 * 1000) {
-            worker->event_timeout = 0;
-            return n;
-        }
     }
+
     return n;
 }
 
@@ -10201,81 +10209,159 @@ static int common_channel_config_socket(RedChannelClient *rcc)
     return TRUE;
 }
 
-static void worker_watch_update_mask(SpiceWatch *watch, int event_mask)
+typedef struct SpiceTimer {
+    SpiceTimerFunc func;
+    void *opaque;
+    guint source_id;
+} SpiceTimer;
+
+static SpiceTimer* worker_timer_add(SpiceTimerFunc func, void *opaque)
 {
-    struct RedWorker *worker;
-    int i;
+    SpiceTimer *timer = g_new0(SpiceTimer, 1);
 
-    if (!watch) {
-        return;
-    }
+    timer->func = func;
+    timer->opaque = opaque;
 
-    worker = watch->worker;
-    i = watch - worker->watches;
-
-    worker->poll_fds[i].events = 0;
-    if (event_mask & SPICE_WATCH_EVENT_READ) {
-        worker->poll_fds[i].events |= POLLIN;
-    }
-    if (event_mask & SPICE_WATCH_EVENT_WRITE) {
-        worker->poll_fds[i].events |= POLLOUT;
-    }
+    return timer;
 }
 
-static SpiceWatch *worker_watch_add(int fd, int event_mask, SpiceWatchFunc func, void *opaque)
+static gboolean worker_timer_func(gpointer user_data)
 {
-    /* Since we are a channel core implementation, we always get called from
-       red_channel_client_create(), so opaque always is our rcc */
+    SpiceTimer *timer = user_data;
+
+    timer->source_id = 0;
+    timer->func(timer->opaque);
+    /* timer might be free after func(), don't touch */
+
+    return FALSE;
+}
+
+static void worker_timer_cancel(SpiceTimer *timer)
+{
+    if (timer->source_id == 0)
+        return;
+
+    g_source_remove(timer->source_id);
+    timer->source_id = 0;
+}
+
+static void worker_timer_start(SpiceTimer *timer, uint32_t ms)
+{
+    worker_timer_cancel(timer);
+
+    timer->source_id = g_timeout_add(ms, worker_timer_func, timer);
+}
+
+static void worker_timer_remove(SpiceTimer *timer)
+{
+    worker_timer_cancel(timer);
+    g_free(timer);
+}
+
+static GIOCondition spice_event_to_giocondition(int event_mask)
+{
+    GIOCondition condition = 0;
+
+    if (event_mask & SPICE_WATCH_EVENT_READ)
+        condition |= G_IO_IN;
+    if (event_mask & SPICE_WATCH_EVENT_WRITE)
+        condition |= G_IO_OUT;
+
+    return condition;
+}
+
+static int giocondition_to_spice_event(GIOCondition condition)
+{
+    int event = 0;
+
+    if (condition & G_IO_IN)
+        event |= SPICE_WATCH_EVENT_READ;
+    if (condition & G_IO_OUT)
+        event |= SPICE_WATCH_EVENT_WRITE;
+
+    return event;
+}
+
+struct SpiceWatch {
+    GIOChannel *channel;
+    GSource *source;
+    RedChannelClient *rcc;
+    SpiceWatchFunc func;
+};
+
+static gboolean watch_func(GIOChannel *source, GIOCondition condition,
+                           gpointer data)
+{
+    SpiceWatch *watch = data;
+    int fd = g_io_channel_unix_get_fd(source);
+
+    watch->func(fd, giocondition_to_spice_event(condition), watch->rcc);
+
+    return TRUE;
+}
+
+static void worker_watch_update_mask(SpiceWatch *watch, int events)
+{
+    RedWorker *worker;
+
+    spice_return_if_fail(watch != NULL);
+    worker = SPICE_CONTAINEROF(watch->rcc->channel, CommonChannel, base)->worker;
+
+    if (watch->source) {
+        g_source_destroy(watch->source);
+        watch->source = NULL;
+    }
+
+    if (!events)
+        return;
+
+    watch->source = g_io_create_watch(watch->channel, spice_event_to_giocondition(events));
+    g_source_set_callback(watch->source, (GSourceFunc)watch_func, watch, NULL);
+    g_source_attach(watch->source, worker->main_context);
+}
+
+static SpiceWatch* worker_watch_add(int fd, int events, SpiceWatchFunc func, void *opaque)
+{
     RedChannelClient *rcc = opaque;
-    struct RedWorker *worker;
-    int i;
+    RedWorker *worker;
+    SpiceWatch *watch;
+
+    spice_return_val_if_fail(rcc != NULL, NULL);
+    spice_return_val_if_fail(fd != -1, NULL);
+    spice_return_val_if_fail(func != NULL, NULL);
 
     /* Since we are called from red_channel_client_create()
        CommonChannelClient->worker has not been set yet! */
     worker = SPICE_CONTAINEROF(rcc->channel, CommonChannel, base)->worker;
+    spice_return_val_if_fail(worker != NULL, NULL);
+    spice_return_val_if_fail(worker->main_context != NULL, NULL);
 
-    /* Search for a free slot in our poll_fds & watches arrays */
-    for (i = 0; i < MAX_EVENT_SOURCES; i++) {
-        if (worker->poll_fds[i].fd == -1) {
-            break;
-        }
-    }
-    if (i == MAX_EVENT_SOURCES) {
-        spice_warning("could not add a watch for channel type %u id %u",
-                      rcc->channel->type, rcc->channel->id);
-        return NULL;
-    }
+    watch = g_new0(SpiceWatch, 1);
+    watch->channel = g_io_channel_unix_new(fd);
+    watch->rcc = rcc;
+    watch->func = func;
 
-    worker->poll_fds[i].fd = fd;
-    worker->watches[i].worker = worker;
-    worker->watches[i].watch_func = func;
-    worker->watches[i].watch_func_opaque = opaque;
-    worker_watch_update_mask(&worker->watches[i], event_mask);
+    worker_watch_update_mask(watch, events);
 
-    return &worker->watches[i];
+    return watch;
 }
 
 static void worker_watch_remove(SpiceWatch *watch)
 {
-    if (!watch) {
-        return;
-    }
+    spice_return_if_fail(watch != NULL);
 
-    /* Note we don't touch the poll_fd here, to avoid the
-       poll_fds/watches table entry getting re-used in the same
-       red_worker_main loop over the fds as it is removed.
+    if (watch->source)
+        g_source_destroy(watch->source);
 
-       This is done because re-using it while events were pending on
-       the fd previously occupying the slot would lead to incorrectly
-       calling the watch_func for the new fd. */
-    memset(watch, 0, sizeof(SpiceWatch));
+    g_io_channel_unref(watch->channel);
+    g_free(watch);
 }
 
-SpiceCoreInterface worker_core = {
-    .timer_add = spice_timer_queue_add,
-    .timer_start = spice_timer_set,
-    .timer_cancel = spice_timer_cancel,
-    .timer_remove = spice_timer_remove,
+static const SpiceCoreInterface worker_core = {
+    .timer_add = worker_timer_add,
+    .timer_start = worker_timer_start,
+    .timer_cancel = worker_timer_cancel,
+    .timer_remove = worker_timer_remove,
 
     .watch_update_mask = worker_watch_update_mask,
     .watch_add = worker_watch_add,
@@ -11939,21 +12025,89 @@ static void worker_dispatcher_register(RedWorker *worker, Dispatcher *dispatcher
 
 
 
-static void handle_dev_input(int fd, int event, void *opaque)
+static gboolean worker_dispatcher_cb(GIOChannel *source, GIOCondition condition,
+                                     gpointer data)
 {
-    RedWorker *worker = opaque;
+    RedWorker *worker = data;
 
+    spice_debug(NULL);
     dispatcher_handle_recv_read(red_dispatcher_get_dispatcher(worker->red_dispatcher));
+
+    return TRUE;
 }
+
+typedef struct _RedWorkerSource {
+    GSource source;
+    RedWorker *worker;
+} RedWorkerSource;
+
+static gboolean worker_source_prepare(GSource *source, gint *timeout)
+{
+    RedWorkerSource *wsource = (RedWorkerSource *)source;
+    RedWorker *worker = wsource->worker;
+
+    *timeout = worker->timeout;
+
+    return FALSE; /* do no timeout poll */
+}
+
+static gboolean worker_source_check(GSource *source)
+{
+    RedWorkerSource *wsource = (RedWorkerSource *)source;
+    RedWorker *worker = wsource->worker;
+
+    return worker->running /* TODO && worker->pending_process */;
+}
+
+static void red_display_cc_free_glz_drawables(RedChannelClient *rcc)
+{
+    DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
+
+    red_display_handle_glz_drawables_to_free(dcc);
+}
+
+static gboolean worker_source_dispatch(GSource *source, GSourceFunc callback,
+                                       gpointer user_data)
+{
+    RedWorkerSource *wsource = (RedWorkerSource *)source;
+    RedWorker *worker = wsource->worker;
+    int ring_is_empty;
+
+    if (worker->display_channel) {
+        /* during migration, in the dest, the display channel can be initialized
+           while the global lz data not since migrate data msg hasn't been
+           received yet */
+        /* FIXME: why is this here, and not in display_channel_create */
+        red_channel_apply_clients(&worker->display_channel->common.base,
+                                  red_display_cc_free_glz_drawables);
+    }
+
+    worker->timeout = -1;
+    red_process_cursor(worker, MAX_PIPE_SIZE, &ring_is_empty);
+    red_process_commands(worker, MAX_PIPE_SIZE, &ring_is_empty);
+
+    /* FIXME: remove me? that should be handled by watch out condition */
+    red_push(worker);
+
+    return TRUE;
+}
+
+/* cannot be const */
+static GSourceFuncs worker_source_funcs = {
+    .prepare = worker_source_prepare,
+    .check = worker_source_check,
+    .dispatch = worker_source_dispatch,
+};
 
 static RedWorker* red_worker_new(WorkerInitData *init_data)
 {
     RedWorker *worker = spice_new0(RedWorker, 1);
     RedWorkerMessage message;
     Dispatcher *dispatcher;
-    int i;
     const char *record_filename;
     spice_assert(sizeof(CursorItem) <= QXL_CURSUR_DEVICE_DATA_SIZE);
+
+    worker->main_context = g_main_context_new();
 
     record_filename = getenv("SPICE_WORKER_RECORD_FILENAME");
     if (record_filename) {
@@ -12005,15 +12159,18 @@ static RedWorker* red_worker_new(WorkerInitData *init_data)
     worker->wakeup_counter = stat_add_counter(worker->stat, "wakeups", TRUE);
     worker->command_counter = stat_add_counter(worker->stat, "commands", TRUE);
 #endif
-    for (i = 0; i < MAX_EVENT_SOURCES; i++) {
-        worker->poll_fds[i].fd = -1;
-    }
 
-    worker->poll_fds[0].fd = worker->channel;
-    worker->poll_fds[0].events = POLLIN;
-    worker->watches[0].worker = worker;
-    worker->watches[0].watch_func = handle_dev_input;
-    worker->watches[0].watch_func_opaque = worker;
+    GIOChannel *channel = g_io_channel_unix_new(dispatcher_get_recv_fd(dispatcher));
+    GSource *source = g_io_create_watch(channel, G_IO_IN);
+    g_source_set_callback(source, (GSourceFunc)worker_dispatcher_cb, worker, NULL);
+    g_source_attach(source, worker->main_context);
+    g_source_unref(source);
+
+    source = g_source_new(&worker_source_funcs, sizeof(RedWorkerSource));
+    RedWorkerSource *wsource = (RedWorkerSource *)source;
+    wsource->worker = worker;
+    g_source_attach(source, worker->main_context);
+    g_source_unref(source);
 
     red_memslot_info_init(&worker->mem_slots,
                           init_data->num_memslots_groups,
@@ -12025,9 +12182,6 @@ static RedWorker* red_worker_new(WorkerInitData *init_data)
     spice_warn_if(init_data->n_surfaces > NUM_SURFACES);
     worker->n_surfaces = init_data->n_surfaces;
 
-    if (!spice_timer_queue_create()) {
-        spice_error("failed to create timer queue");
-    }
     srand(time(NULL));
 
     message = RED_WORKER_MESSAGE_READY;
@@ -12037,18 +12191,11 @@ static RedWorker* red_worker_new(WorkerInitData *init_data)
     red_init_lz(worker);
     red_init_jpeg(worker);
     red_init_zlib(worker);
-    worker->event_timeout = INF_EVENT_WAIT;
+    worker->timeout = -1;
 
     return worker;
 }
 
-
-static void red_display_cc_free_glz_drawables(RedChannelClient *rcc)
-{
-    DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
-
-    red_display_handle_glz_drawables_to_free(dcc);
-}
 
 SPICE_GNUC_NORETURN void *red_worker_main(void *arg)
 {
@@ -12064,64 +12211,10 @@ SPICE_GNUC_NORETURN void *red_worker_main(void *arg)
     }
 #endif
 
-    for (;;) {
-        int i, num_events;
-        unsigned int timers_queue_timeout;
+    GMainLoop *loop = g_main_loop_new(worker->main_context, FALSE);
+    g_main_loop_run(loop);
+    g_main_loop_unref(loop);
 
-        timers_queue_timeout = spice_timer_queue_get_timeout_ms();
-        worker->event_timeout = MIN(red_get_streams_timout(worker), worker->event_timeout);
-        worker->event_timeout = MIN(timers_queue_timeout, worker->event_timeout);
-        num_events = poll(worker->poll_fds, MAX_EVENT_SOURCES, worker->event_timeout);
-        red_handle_streams_timout(worker);
-        spice_timer_queue_cb();
-
-        if (worker->display_channel) {
-            /* during migration, in the dest, the display channel can be initialized
-               while the global lz data not since migrate data msg hasn't been
-               received yet */
-            red_channel_apply_clients(&worker->display_channel->common.base,
-                                      red_display_cc_free_glz_drawables);
-        }
-
-        worker->event_timeout = INF_EVENT_WAIT;
-        if (num_events == -1) {
-            if (errno != EINTR) {
-                spice_error("poll failed, %s", strerror(errno));
-            }
-        }
-
-        for (i = 0; i < MAX_EVENT_SOURCES; i++) {
-            /* The watch may have been removed by the watch-func from
-               another fd (ie a disconnect through the dispatcher),
-               in this case watch_func is NULL. */
-            if (worker->poll_fds[i].revents && worker->watches[i].watch_func) {
-                int events = 0;
-                if (worker->poll_fds[i].revents & POLLIN) {
-                    events |= SPICE_WATCH_EVENT_READ;
-                }
-                if (worker->poll_fds[i].revents & POLLOUT) {
-                    events |= SPICE_WATCH_EVENT_WRITE;
-                }
-                worker->watches[i].watch_func(worker->poll_fds[i].fd, events,
-                                        worker->watches[i].watch_func_opaque);
-            }
-        }
-
-        /* Clear the poll_fd for any removed watches, see the comment in
-           watch_remove for why we don't do this there. */
-        for (i = 0; i < MAX_EVENT_SOURCES; i++) {
-            if (!worker->watches[i].watch_func) {
-                worker->poll_fds[i].fd = -1;
-            }
-        }
-
-        if (worker->running) {
-            int ring_is_empty;
-            red_process_cursor(worker, MAX_PIPE_SIZE, &ring_is_empty);
-            red_process_commands(worker, MAX_PIPE_SIZE, &ring_is_empty);
-        }
-        red_push(worker);
-    }
-
-    spice_warn_if_reached();
+    /* FIXME: free worker, and join threads */
+    abort();
 }
