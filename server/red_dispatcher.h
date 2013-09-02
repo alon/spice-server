@@ -50,11 +50,6 @@ static inline void write_message(int fd, RedWorkerMessage *message)
     xwrite(fd, message, sizeof(RedWorkerMessage));
 }
 
-static inline void read_message(int fd, RedWorkerMessage *message)
-{
-    xread(fd, message, sizeof(RedWorkerMessage));
-}
-
 enum {
     RED_WORKER_MESSAGE_NOP,
     RED_WORKER_MESSAGE_UPDATE,

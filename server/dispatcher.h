@@ -2,6 +2,7 @@
 #define DISPATCHER_H
 
 #include <spice.h>
+#include "spice_server_utils.h"
 
 typedef struct Dispatcher Dispatcher;
 
@@ -43,6 +44,7 @@ struct Dispatcher {
  */
 void dispatcher_send_message(Dispatcher *dispatcher, uint32_t message_type,
                              void *payload);
+uint32_t dispatcher_read_message(Dispatcher *dispatcher);
 
 /*
  * dispatcher_init

@@ -914,6 +914,7 @@ typedef struct ItemTrace {
 #define NUM_CURSORS 100
 
 typedef struct RedWorker {
+    pthread_t thread;
     GMainContext *main_context;
     DisplayChannel *display_channel;
     CursorChannel *cursor_channel;
@@ -12101,7 +12102,7 @@ static GSourceFuncs worker_source_funcs = {
     .dispatch = worker_source_dispatch,
 };
 
-static RedWorker* red_worker_new(WorkerInitData *init_data)
+RedWorker* red_worker_new(WorkerInitData *init_data)
 {
     RedWorker *worker = spice_new0(RedWorker, 1);
     RedWorkerMessage message;
@@ -12119,10 +12120,7 @@ static RedWorker* red_worker_new(WorkerInitData *init_data)
         if (worker->record_fd == NULL) {
             spice_error("failed to open recording file %s\n", record_filename);
         }
-        if (pthread_getcpuclockid(pthread_self(), &worker->record_clock_id)) {
-            spice_error("pthread_getcpuclockid failed");
-        }
-	if (fwrite(header, sizeof(header), 1, worker->record_fd) != 1) {
+        if (fwrite(header, sizeof(header), 1, worker->record_fd) != 1) {
             spice_error("failed to write replay header");
         }
     }
@@ -12199,19 +12197,23 @@ static RedWorker* red_worker_new(WorkerInitData *init_data)
 }
 
 
-SPICE_GNUC_NORETURN void *red_worker_main(void *arg)
+SPICE_GNUC_NORETURN static void *red_worker_main(void *arg)
 {
-    RedWorker *worker = red_worker_new(arg);
+    RedWorker *worker = arg;
 
     spice_info("begin");
     spice_assert(MAX_PIPE_SIZE > WIDE_CLIENT_ACK_WINDOW &&
            MAX_PIPE_SIZE > NARROW_CLIENT_ACK_WINDOW); //ensure wakeup by ack message
 
+    // TODO: call once unconditionnally
 #if  defined(RED_WORKER_STAT) || defined(COMPRESS_STAT)
     if (pthread_getcpuclockid(pthread_self(), &clock_id)) {
         spice_error("pthread_getcpuclockid failed");
     }
 #endif
+    if (pthread_getcpuclockid(pthread_self(), &worker->record_clock_id)) {
+        spice_error("pthread_getcpuclockid failed");
+    }
 
     GMainLoop *loop = g_main_loop_new(worker->main_context, FALSE);
     g_main_loop_run(loop);
@@ -12219,4 +12221,29 @@ SPICE_GNUC_NORETURN void *red_worker_main(void *arg)
 
     /* FIXME: free worker, and join threads */
     abort();
+}
+
+bool red_worker_run(RedWorker *worker)
+{
+    uint32_t message;
+    sigset_t thread_sig_mask;
+    sigset_t curr_sig_mask;
+    int r;
+
+    spice_return_val_if_fail(worker, FALSE);
+    spice_return_val_if_fail(!worker->thread, FALSE);
+
+    sigfillset(&thread_sig_mask);
+    sigdelset(&thread_sig_mask, SIGILL);
+    sigdelset(&thread_sig_mask, SIGFPE);
+    sigdelset(&thread_sig_mask, SIGSEGV);
+    pthread_sigmask(SIG_SETMASK, &thread_sig_mask, &curr_sig_mask);
+    if ((r = pthread_create(&worker->thread, NULL, red_worker_main, worker))) {
+        spice_error("create thread failed %d", r);
+    }
+    pthread_sigmask(SIG_SETMASK, &curr_sig_mask, NULL);
+
+    message = dispatcher_read_message(red_dispatcher_get_dispatcher(worker->red_dispatcher));
+
+    return message == RED_WORKER_MESSAGE_READY;
 }

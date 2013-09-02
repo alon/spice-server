@@ -56,7 +56,6 @@ struct RedDispatcher {
     QXLWorker base;
     QXLInstance *qxl;
     Dispatcher dispatcher;
-    pthread_t worker_thread;
     uint32_t pending;
     int primary_active;
     int x_res;
@@ -1075,14 +1074,10 @@ static RedChannel *red_dispatcher_cursor_channel_create(RedDispatcher *dispatche
 void red_dispatcher_init(QXLInstance *qxl)
 {
     RedDispatcher *red_dispatcher;
-    RedWorkerMessage message;
     WorkerInitData init_data;
     QXLDevInitInfo init_info;
-    int r;
     RedChannel *display_channel;
     RedChannel *cursor_channel;
-    sigset_t thread_sig_mask;
-    sigset_t curr_sig_mask;
     ClientCbs client_cbs = { NULL, };
 
     spice_return_if_fail(qxl->st->dispatcher == NULL);
@@ -1140,19 +1135,9 @@ void red_dispatcher_init(QXLInstance *qxl)
 
     num_active_workers = 1;
 
-    sigfillset(&thread_sig_mask);
-    sigdelset(&thread_sig_mask, SIGILL);
-    sigdelset(&thread_sig_mask, SIGFPE);
-    sigdelset(&thread_sig_mask, SIGSEGV);
-    pthread_sigmask(SIG_SETMASK, &thread_sig_mask, &curr_sig_mask);
-    if ((r = pthread_create(&red_dispatcher->worker_thread, NULL, red_worker_main, &init_data))) {
-        spice_error("create thread failed %d", r);
-    }
-    pthread_sigmask(SIG_SETMASK, &curr_sig_mask, NULL);
-
-    read_message(red_dispatcher->dispatcher.send_fd, &message);
-    spice_assert(message == RED_WORKER_MESSAGE_READY);
-
+    // TODO: reference and free
+    RedWorker *worker = red_worker_new(&init_data);
+    red_worker_run(worker);
     display_channel = red_dispatcher_display_channel_create(red_dispatcher);
 
     if (display_channel) {
