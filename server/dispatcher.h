@@ -55,6 +55,8 @@ uint32_t dispatcher_read_message(Dispatcher *dispatcher);
 void dispatcher_init(Dispatcher *dispatcher, size_t max_message_type,
                      void *opaque);
 
+void dispatcher_attach(Dispatcher *dispatcher, GMainContext *main_context);
+
 enum {
     DISPATCHER_NONE = 0,
     DISPATCHER_ACK,
