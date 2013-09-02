@@ -45,17 +45,15 @@ void red_dispatcher_client_monitors_config(VDAgentMonitorsConfig *monitors_confi
 
 typedef uint32_t RedWorkerMessage;
 
-static inline void write_message(int fd, RedWorkerMessage *message)
-{
-    xwrite(fd, message, sizeof(RedWorkerMessage));
-}
-
+/* Keep message order, only append new messages! */
 enum {
     RED_WORKER_MESSAGE_NOP,
+
     RED_WORKER_MESSAGE_UPDATE,
     RED_WORKER_MESSAGE_WAKEUP,
     RED_WORKER_MESSAGE_OOM,
-    RED_WORKER_MESSAGE_READY,
+    RED_WORKER_MESSAGE_READY, /* unused */
+
     RED_WORKER_MESSAGE_DISPLAY_CONNECT,
     RED_WORKER_MESSAGE_DISPLAY_DISCONNECT,
     RED_WORKER_MESSAGE_DISPLAY_MIGRATE,
