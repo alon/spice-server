@@ -165,12 +165,12 @@ static inline red_time_t timespec_to_red_time(struct timespec *time)
 }
 
 #if defined(RED_WORKER_STAT) || defined(COMPRESS_STAT)
-static clockid_t clock_id;
 
 typedef unsigned long stat_time_t;
 
-static stat_time_t stat_now(void)
+static stat_time_t stat_now(RedWorker *worker)
 {
+    clockid_t clock_id = worker->clockid;
     struct timespec ts;
 
     clock_gettime(clock_id, &ts);
@@ -216,11 +216,11 @@ static inline void stat_init(stat_info_t *info, const char *name)
     stat_reset(info);
 }
 
-static inline void stat_add(stat_info_t *info, stat_time_t start)
+static inline void stat_add(RedWorker *worker, stat_info_t *info, stat_time_t start)
 {
     stat_time_t time;
     ++info->count;
-    time = stat_now() - start;
+    time = stat_now(worker) - start;
     info->total += time;
     info->max = MAX(info->max, time);
     info->min = MIN(info->min, time);
@@ -245,12 +245,13 @@ static inline void stat_compress_init(stat_info_t *info, const char *name)
     stat_reset(info);
 }
 
-static inline void stat_compress_add(stat_info_t *info, stat_time_t start, int orig_size,
+static inline void stat_compress_add(RedWorker *worker, stat_info_t *info,
+                                     stat_time_t start, int orig_size,
                                      int comp_size)
 {
     stat_time_t time;
     ++info->count;
-    time = stat_now() - start;
+    time = stat_now(worker) - start;
     info->total += time;
     info->max = MAX(info->max, time);
     info->min = MIN(info->min, time);
@@ -915,6 +916,7 @@ typedef struct ItemTrace {
 
 typedef struct RedWorker {
     pthread_t thread;
+    clockid_t clockid;
     GMainContext *main_context;
     DisplayChannel *display_channel;
     CursorChannel *cursor_channel;
@@ -1016,7 +1018,6 @@ typedef struct RedWorker {
     int set_client_capabilities_pending;
 
     FILE *record_fd;
-    clockid_t record_clock_id;
 } RedWorker;
 
 typedef enum {
@@ -2223,7 +2224,7 @@ static inline void __exclude_region(RedWorker *worker, Ring *ring, TreeItem *ite
 {
     QRegion and_rgn;
 #ifdef RED_WORKER_STAT
-    stat_time_t start_time = stat_now();
+    stat_time_t start_time = stat_now(worker);
 #endif
 
     region_clone(&and_rgn, rgn);
@@ -2293,7 +2294,7 @@ static void exclude_region(RedWorker *worker, Ring *ring, RingItem *ring_item, Q
                            TreeItem **last, Drawable *frame_candidate)
 {
 #ifdef RED_WORKER_STAT
-    stat_time_t start_time = stat_now();
+    stat_time_t start_time = stat_now(worker);
 #endif
     Ring *top_ring;
 
@@ -3631,7 +3632,7 @@ static inline int red_current_add(RedWorker *worker, Ring *ring, Drawable *drawa
 {
     DrawItem *item = &drawable->tree_item;
 #ifdef RED_WORKER_STAT
-    stat_time_t start_time = stat_now();
+    stat_time_t start_time = stat_now(worker);
 #endif
     RingItem *now;
     QRegion exclude_rgn;
@@ -3786,7 +3787,7 @@ static inline int red_current_add_with_shadow(RedWorker *worker, Ring *ring, Dra
                                               SpicePoint *delta)
 {
 #ifdef RED_WORKER_STAT
-    stat_time_t start_time = stat_now();
+    stat_time_t start_time = stat_now(worker);
 #endif
 
     Shadow *shadow = __new_shadow(worker, item, delta);
@@ -4992,7 +4993,7 @@ static void red_record_event(RedWorker *worker, int what, uint32_t type)
     // and make it trivial to get a histogram from a file.
     // But to implement that I would need some temporary buffer for each event.
     // (that can be up to VGA_FRAMEBUFFER large)
-    clock_gettime(worker->record_clock_id, &ts);
+    clock_gettime(worker->clockid, &ts);
     fprintf(worker->record_fd, "event %d %d %d %ld\n", counter++, what, type,
         ts.tv_nsec + ts.tv_sec * 1000 * 1000 * 1000);
 }
@@ -6066,7 +6067,7 @@ static inline int red_glz_compress_image(DisplayChannelClient *dcc,
     DisplayChannel *display_channel = DCC_TO_DC(dcc);
     RedWorker *worker = display_channel->common.worker;
 #ifdef COMPRESS_STAT
-    stat_time_t start_time = stat_now();
+    stat_time_t start_time = stat_now(worker);
 #endif
     spice_assert(bitmap_fmt_is_rgb(src->format));
     GlzData *glz_data = &dcc->glz_data;
@@ -6109,7 +6110,7 @@ static inline int red_glz_compress_image(DisplayChannelClient *dcc,
         goto glz;
     }
 #ifdef COMPRESS_STAT
-    start_time = stat_now();
+    start_time = stat_now(worker);
 #endif
     zlib_data = &worker->zlib_data;
 
@@ -6172,7 +6173,7 @@ static inline int red_lz_compress_image(DisplayChannelClient *dcc,
     int size;            // size of the compressed data
 
 #ifdef COMPRESS_STAT
-    stat_time_t start_time = stat_now();
+    stat_time_t start_time = stat_now(worker);
 #endif
 
     lz_data->data.bufs_tail = red_display_alloc_compress_buf(dcc);
@@ -6258,7 +6259,7 @@ static int red_jpeg_compress_image(DisplayChannelClient *dcc, SpiceImage *dest,
     uint8_t *lz_out_start_byte;
 
 #ifdef COMPRESS_STAT
-    stat_time_t start_time = stat_now();
+    stat_time_t start_time = stat_now(worker);
 #endif
     switch (src->format) {
     case SPICE_BITMAP_FMT_16BIT:
@@ -6392,7 +6393,7 @@ static inline int red_quic_compress_image(DisplayChannelClient *dcc, SpiceImage 
     int size, stride;
 
 #ifdef COMPRESS_STAT
-    stat_time_t start_time = stat_now();
+    stat_time_t start_time = stat_now(worker);
 #endif
 
     switch (src->format) {
@@ -12205,14 +12206,8 @@ SPICE_GNUC_NORETURN static void *red_worker_main(void *arg)
     spice_assert(MAX_PIPE_SIZE > WIDE_CLIENT_ACK_WINDOW &&
            MAX_PIPE_SIZE > NARROW_CLIENT_ACK_WINDOW); //ensure wakeup by ack message
 
-    // TODO: call once unconditionnally
-#if  defined(RED_WORKER_STAT) || defined(COMPRESS_STAT)
-    if (pthread_getcpuclockid(pthread_self(), &clock_id)) {
-        spice_error("pthread_getcpuclockid failed");
-    }
-#endif
-    if (pthread_getcpuclockid(pthread_self(), &worker->record_clock_id)) {
-        spice_error("pthread_getcpuclockid failed");
+    if (pthread_getcpuclockid(pthread_self(), &worker->clockid)) {
+        spice_warning("getcpuclockid failed");
     }
 
     GMainLoop *loop = g_main_loop_new(worker->main_context, FALSE);
