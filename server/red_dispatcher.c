@@ -77,11 +77,6 @@ typedef struct RedWorkeState {
     uint32_t stride;
 } RedWorkeState;
 
-extern uint32_t streaming_video;
-extern spice_image_compression_t image_compression;
-extern spice_wan_compression_t jpeg_state;
-extern spice_wan_compression_t zlib_glz_state;
-
 static RedDispatcher *dispatchers = NULL;
 
 static int red_dispatcher_check_qxl_version(RedDispatcher *rd, int major, int minor)
@@ -211,46 +206,6 @@ static void red_dispatcher_cursor_migrate(RedChannelClient *rcc)
     dispatcher_send_message(&dispatcher->dispatcher,
                             RED_WORKER_MESSAGE_CURSOR_MIGRATE,
                             &payload);
-}
-
-typedef struct RendererInfo {
-    int id;
-    const char *name;
-} RendererInfo;
-
-static RendererInfo renderers_info[] = {
-    {RED_RENDERER_SW, "sw"},
-#ifdef USE_OPENGL
-    {RED_RENDERER_OGL_PBUF, "oglpbuf"},
-    {RED_RENDERER_OGL_PIXMAP, "oglpixmap"},
-#endif
-    {RED_RENDERER_INVALID, NULL},
-};
-
-static uint32_t renderers[RED_RENDERER_LAST];
-static uint32_t num_renderers = 0;
-
-static RendererInfo *find_renderer(const char *name)
-{
-    RendererInfo *inf = renderers_info;
-    while (inf->name) {
-        if (strcmp(name, inf->name) == 0) {
-            return inf;
-        }
-        inf++;
-    }
-    return NULL;
-}
-
-int red_dispatcher_add_renderer(const char *name)
-{
-    RendererInfo *inf;
-
-    if (num_renderers == RED_RENDERER_LAST || !(inf = find_renderer(name))) {
-        return FALSE;
-    }
-    renderers[num_renderers++] = inf->id;
-    return TRUE;
 }
 
 int red_dispatcher_qxl_count(void)
@@ -632,14 +587,24 @@ static void qxl_worker_reset_memslots(QXLWorker *qxl_worker)
     red_dispatcher_reset_memslots((RedDispatcher*)qxl_worker);
 }
 
+static bool red_dispatcher_set_pending(RedDispatcher *dispatcher, int pending)
+{
+    // TODO: this is not atomic, do we need atomic?
+    if (test_bit(pending, dispatcher->pending)) {
+        return TRUE;
+    }
+
+    set_bit(pending, &dispatcher->pending);
+    return FALSE;
+}
+
 static void red_dispatcher_wakeup(RedDispatcher *dispatcher)
 {
     RedWorkerMessageWakeup payload;
 
-    if (test_bit(RED_WORKER_PENDING_WAKEUP, dispatcher->pending)) {
+    if (red_dispatcher_set_pending(dispatcher, RED_DISPATCHER_PENDING_WAKEUP))
         return;
-    }
-    set_bit(RED_WORKER_PENDING_WAKEUP, &dispatcher->pending);
+
     dispatcher_send_message(&dispatcher->dispatcher,
                             RED_WORKER_MESSAGE_WAKEUP,
                             &payload);
@@ -654,10 +619,9 @@ static void red_dispatcher_oom(RedDispatcher *dispatcher)
 {
     RedWorkerMessageOom payload;
 
-    if (test_bit(RED_WORKER_PENDING_OOM, dispatcher->pending)) {
+    if (red_dispatcher_set_pending(dispatcher, RED_DISPATCHER_PENDING_OOM))
         return;
-    }
-    set_bit(RED_WORKER_PENDING_OOM, &dispatcher->pending);
+
     dispatcher_send_message(&dispatcher->dispatcher,
                             RED_WORKER_MESSAGE_OOM,
                             &payload);
@@ -1074,12 +1038,11 @@ static RedChannel *red_dispatcher_cursor_channel_create(RedDispatcher *dispatche
 RedDispatcher *red_dispatcher_new(QXLInstance *qxl)
 {
     RedDispatcher *red_dispatcher;
-    WorkerInitData init_data;
-    QXLDevInitInfo init_info;
     RedChannel *display_channel;
     RedChannel *cursor_channel;
     ClientCbs client_cbs = { NULL, };
 
+    spice_return_val_if_fail(qxl != NULL, NULL);
     spice_return_val_if_fail(qxl->st->dispatcher == NULL, NULL);
 
     quic_init();
@@ -1089,22 +1052,11 @@ RedDispatcher *red_dispatcher_new(QXLInstance *qxl)
 #endif // USE_OPENGL
 
     red_dispatcher = spice_new0(RedDispatcher, 1);
+    red_dispatcher->qxl = qxl;
     ring_init(&red_dispatcher->async_commands);
     spice_debug("red_dispatcher->async_commands.next %p", red_dispatcher->async_commands.next);
     dispatcher_init(&red_dispatcher->dispatcher, RED_WORKER_MESSAGE_COUNT, NULL);
-    init_data.qxl = red_dispatcher->qxl = qxl;
-    init_data.id = qxl->id;
-    init_data.red_dispatcher = red_dispatcher;
-    init_data.pending = &red_dispatcher->pending;
-    init_data.num_renderers = num_renderers;
-    memcpy(init_data.renderers, renderers, sizeof(init_data.renderers));
-
     pthread_mutex_init(&red_dispatcher->async_lock, NULL);
-    init_data.image_compression = image_compression;
-    init_data.jpeg_state = jpeg_state;
-    init_data.zlib_glz_state = zlib_glz_state;
-    init_data.streaming_video = streaming_video;
-
     red_dispatcher->base.major_version = SPICE_INTERFACE_QXL_MAJOR;
     red_dispatcher->base.minor_version = SPICE_INTERFACE_QXL_MINOR;
     red_dispatcher->base.wakeup = qxl_worker_wakeup;
@@ -1118,26 +1070,17 @@ RedDispatcher *red_dispatcher_new(QXLInstance *qxl)
     red_dispatcher->base.destroy_surfaces = qxl_worker_destroy_surfaces;
     red_dispatcher->base.create_primary_surface = qxl_worker_create_primary_surface;
     red_dispatcher->base.destroy_primary_surface = qxl_worker_destroy_primary_surface;
-
     red_dispatcher->base.reset_image_cache = qxl_worker_reset_image_cache;
     red_dispatcher->base.reset_cursor = qxl_worker_reset_cursor;
     red_dispatcher->base.destroy_surface_wait = qxl_worker_destroy_surface_wait;
     red_dispatcher->base.loadvm_commands = qxl_worker_loadvm_commands;
 
-    qxl->st->qif->get_init_info(qxl, &init_info);
-
-    init_data.memslot_id_bits = init_info.memslot_id_bits;
-    init_data.memslot_gen_bits = init_info.memslot_gen_bits;
-    init_data.num_memslots = init_info.num_memslots;
-    init_data.num_memslots_groups = init_info.num_memslots_groups;
-    init_data.internal_groupslot_id = init_info.internal_groupslot_id;
-    init_data.n_surfaces = init_info.n_surfaces;
+    // TODO: reference and free
+    RedWorker *worker = red_worker_new(qxl, red_dispatcher);
+    red_worker_run(worker);
 
     num_active_workers = 1;
 
-    // TODO: reference and free
-    RedWorker *worker = red_worker_new(&init_data);
-    red_worker_run(worker);
     display_channel = red_dispatcher_display_channel_create(red_dispatcher);
 
     if (display_channel) {
@@ -1177,8 +1120,15 @@ struct Dispatcher *red_dispatcher_get_dispatcher(RedDispatcher *red_dispatcher)
     return &red_dispatcher->dispatcher;
 }
 
-void red_dispatcher_set_dispatcher_opaque(struct RedDispatcher *red_dispatcher,
+void red_dispatcher_set_dispatcher_opaque(RedDispatcher *red_dispatcher,
                                           void *opaque)
 {
     dispatcher_set_opaque(&red_dispatcher->dispatcher, opaque);
+}
+
+void red_dispatcher_clear_pending(RedDispatcher *red_dispatcher, int pending)
+{
+    spice_return_if_fail(red_dispatcher != NULL);
+
+    clear_bit(pending, &red_dispatcher->pending);
 }

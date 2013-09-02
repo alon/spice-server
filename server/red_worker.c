@@ -924,7 +924,7 @@ typedef struct RedWorker {
     int channel;
     int id;
     int running;
-    uint32_t *pending;
+
     gint timeout;
     uint32_t repoll_cmd_ring;
     uint32_t repoll_cursor_ring;
@@ -11474,8 +11474,8 @@ void handle_dev_wakeup(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
 
-    clear_bit(RED_WORKER_PENDING_WAKEUP, worker->pending);
     stat_inc_counter(worker->wakeup_counter, 1);
+    red_dispatcher_clear_pending(worker->red_dispatcher, RED_DISPATCHER_PENDING_WAKEUP);
 }
 
 void handle_dev_oom(void *opaque, uint32_t message_type, void *payload)
@@ -11508,7 +11508,7 @@ void handle_dev_oom(void *opaque, uint32_t message_type, void *payload)
                 worker->current_size,
                 worker->display_channel ?
                 red_channel_sum_pipes_size(display_red_channel) : 0);
-    clear_bit(RED_WORKER_PENDING_OOM, worker->pending);
+    red_dispatcher_clear_pending(worker->red_dispatcher, RED_DISPATCHER_PENDING_OOM);
 }
 
 void handle_dev_reset_cursor(void *opaque, uint32_t message_type, void *payload)
@@ -12102,13 +12102,17 @@ static GSourceFuncs worker_source_funcs = {
     .dispatch = worker_source_dispatch,
 };
 
-RedWorker* red_worker_new(WorkerInitData *init_data)
+RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher)
 {
-    RedWorker *worker = spice_new0(RedWorker, 1);
+    QXLDevInitInfo init_info;
+    RedWorker *worker;
     Dispatcher *dispatcher;
     const char *record_filename;
     spice_assert(sizeof(CursorItem) <= QXL_CURSUR_DEVICE_DATA_SIZE);
 
+    qxl->st->qif->get_init_info(qxl, &init_info);
+
+    worker = spice_new0(RedWorker, 1);
     worker->main_context = g_main_context_new();
 
     record_filename = getenv("SPICE_WORKER_RECORD_FILENAME");
@@ -12123,24 +12127,24 @@ RedWorker* red_worker_new(WorkerInitData *init_data)
             spice_error("failed to write replay header");
         }
     }
-    dispatcher = red_dispatcher_get_dispatcher(init_data->red_dispatcher);
+    dispatcher = red_dispatcher_get_dispatcher(red_dispatcher);
     dispatcher_set_opaque(dispatcher, worker);
-    worker->red_dispatcher = init_data->red_dispatcher;
-    worker->qxl = init_data->qxl;
-    worker->id = init_data->id;
+
+    worker->red_dispatcher = red_dispatcher;
+    worker->qxl = qxl;
+    worker->id = qxl->id;
     worker->channel = dispatcher_get_recv_fd(dispatcher);
     worker_dispatcher_register(worker, dispatcher);
-    worker->pending = init_data->pending;
     worker->cursor_visible = TRUE;
-    spice_assert(init_data->num_renderers > 0);
-    worker->num_renderers = init_data->num_renderers;
-    memcpy(worker->renderers, init_data->renderers, sizeof(worker->renderers));
+    spice_assert(num_renderers > 0);
+    worker->num_renderers = num_renderers;
+    memcpy(worker->renderers, renderers, sizeof(worker->renderers));
     worker->renderer = RED_RENDERER_INVALID;
     worker->mouse_mode = SPICE_MOUSE_MODE_SERVER;
-    worker->image_compression = init_data->image_compression;
-    worker->jpeg_state = init_data->jpeg_state;
-    worker->zlib_glz_state = init_data->zlib_glz_state;
-    worker->streaming_video = init_data->streaming_video;
+    worker->image_compression = image_compression;
+    worker->jpeg_state = jpeg_state;
+    worker->zlib_glz_state = zlib_glz_state;
+    worker->streaming_video = streaming_video;
     worker->driver_cap_monitors_config = 0;
     ring_init(&worker->current_list);
     image_cache_init(&worker->image_cache);
@@ -12172,14 +12176,14 @@ RedWorker* red_worker_new(WorkerInitData *init_data)
     g_source_unref(source);
 
     red_memslot_info_init(&worker->mem_slots,
-                          init_data->num_memslots_groups,
-                          init_data->num_memslots,
-                          init_data->memslot_gen_bits,
-                          init_data->memslot_id_bits,
-                          init_data->internal_groupslot_id);
+                          init_info.num_memslots_groups,
+                          init_info.num_memslots,
+                          init_info.memslot_gen_bits,
+                          init_info.memslot_id_bits,
+                          init_info.internal_groupslot_id);
 
-    spice_warn_if(init_data->n_surfaces > NUM_SURFACES);
-    worker->n_surfaces = init_data->n_surfaces;
+    spice_warn_if(init_info.n_surfaces > NUM_SURFACES);
+    worker->n_surfaces = init_info.n_surfaces;
 
     srand(time(NULL));
 

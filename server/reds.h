@@ -67,7 +67,23 @@ int reds_get_agent_mouse(void); // used by inputs_channel
 int reds_has_vdagent(void); // used by inputs channel
 void reds_handle_agent_mouse_event(const VDAgentMouseState *mouse_state); // used by inputs_channel
 
+enum {
+    RED_RENDERER_INVALID,
+    RED_RENDERER_SW,
+    RED_RENDERER_OGL_PBUF,
+    RED_RENDERER_OGL_PIXMAP,
+
+    RED_RENDERER_LAST
+};
+
+extern uint32_t renderers[RED_RENDERER_LAST];
+extern uint32_t num_renderers;
+
 extern struct SpiceCoreInterface *core;
+extern uint32_t streaming_video;
+extern spice_image_compression_t image_compression;
+extern spice_wan_compression_t jpeg_state;
+extern spice_wan_compression_t zlib_glz_state;
 
 // Temporary measures to make splitting reds.c to inputs_channel.c easier
 
