@@ -18,10 +18,12 @@
 #ifndef _H_RED_DISPATCHER
 #define _H_RED_DISPATCHER
 
+#include "spice_server_utils.h"
 #include "red_channel.h"
 
-struct RedChannelClient;
-struct RedDispatcher;
+typedef struct RedDispatcher RedDispatcher;
+typedef struct RedChannelClient RedChannelClient;
+
 typedef struct AsyncCommand AsyncCommand;
 
 void red_dispatcher_init(QXLInstance *qxl);
@@ -40,6 +42,64 @@ void red_dispatcher_async_complete(struct RedDispatcher *, AsyncCommand *);
 struct Dispatcher *red_dispatcher_get_dispatcher(struct RedDispatcher *);
 int red_dispatcher_use_client_monitors_config(void);
 void red_dispatcher_client_monitors_config(VDAgentMonitorsConfig *monitors_config);
+
+typedef uint32_t RedWorkerMessage;
+
+static inline void write_message(int fd, RedWorkerMessage *message)
+{
+    xwrite(fd, message, sizeof(RedWorkerMessage));
+}
+
+static inline void read_message(int fd, RedWorkerMessage *message)
+{
+    xread(fd, message, sizeof(RedWorkerMessage));
+}
+
+enum {
+    RED_WORKER_MESSAGE_NOP,
+    RED_WORKER_MESSAGE_UPDATE,
+    RED_WORKER_MESSAGE_WAKEUP,
+    RED_WORKER_MESSAGE_OOM,
+    RED_WORKER_MESSAGE_READY,
+    RED_WORKER_MESSAGE_DISPLAY_CONNECT,
+    RED_WORKER_MESSAGE_DISPLAY_DISCONNECT,
+    RED_WORKER_MESSAGE_DISPLAY_MIGRATE,
+    RED_WORKER_MESSAGE_START,
+    RED_WORKER_MESSAGE_STOP,
+    RED_WORKER_MESSAGE_CURSOR_CONNECT,
+    RED_WORKER_MESSAGE_CURSOR_DISCONNECT,
+    RED_WORKER_MESSAGE_CURSOR_MIGRATE,
+    RED_WORKER_MESSAGE_SET_COMPRESSION,
+    RED_WORKER_MESSAGE_SET_STREAMING_VIDEO,
+    RED_WORKER_MESSAGE_SET_MOUSE_MODE,
+    RED_WORKER_MESSAGE_ADD_MEMSLOT,
+    RED_WORKER_MESSAGE_DEL_MEMSLOT,
+    RED_WORKER_MESSAGE_RESET_MEMSLOTS,
+    RED_WORKER_MESSAGE_DESTROY_SURFACES,
+    RED_WORKER_MESSAGE_CREATE_PRIMARY_SURFACE,
+    RED_WORKER_MESSAGE_DESTROY_PRIMARY_SURFACE,
+    RED_WORKER_MESSAGE_RESET_CURSOR,
+    RED_WORKER_MESSAGE_RESET_IMAGE_CACHE,
+    RED_WORKER_MESSAGE_DESTROY_SURFACE_WAIT,
+    RED_WORKER_MESSAGE_LOADVM_COMMANDS,
+    /* async commands */
+    RED_WORKER_MESSAGE_UPDATE_ASYNC,
+    RED_WORKER_MESSAGE_ADD_MEMSLOT_ASYNC,
+    RED_WORKER_MESSAGE_DESTROY_SURFACES_ASYNC,
+    RED_WORKER_MESSAGE_CREATE_PRIMARY_SURFACE_ASYNC,
+    RED_WORKER_MESSAGE_DESTROY_PRIMARY_SURFACE_ASYNC,
+    RED_WORKER_MESSAGE_DESTROY_SURFACE_WAIT_ASYNC,
+    /* suspend/windows resolution change command */
+    RED_WORKER_MESSAGE_FLUSH_SURFACES_ASYNC,
+
+    RED_WORKER_MESSAGE_DISPLAY_CHANNEL_CREATE,
+    RED_WORKER_MESSAGE_CURSOR_CHANNEL_CREATE,
+
+    RED_WORKER_MESSAGE_MONITORS_CONFIG_ASYNC,
+    RED_WORKER_MESSAGE_DRIVER_UNLOAD,
+
+    RED_WORKER_MESSAGE_COUNT // LAST
+};
 
 typedef struct RedWorkerMessageDisplayConnect {
     RedClient * client;
