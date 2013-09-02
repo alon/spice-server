@@ -26,7 +26,7 @@ typedef struct RedChannelClient RedChannelClient;
 
 typedef struct AsyncCommand AsyncCommand;
 
-void red_dispatcher_init(QXLInstance *qxl);
+RedDispatcher *red_dispatcher_new(QXLInstance *qxl);
 
 void red_dispatcher_set_mm_time(uint32_t);
 void red_dispatcher_on_ic_change(void);
