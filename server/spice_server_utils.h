@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <string.h>
 #include <stdbool.h>
+#include <glib.h>
 #include "common/log.h"
 
 static inline void set_bit(int index, uint32_t *addr)

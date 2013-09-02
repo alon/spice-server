@@ -301,3 +301,28 @@ int dispatcher_get_recv_fd(Dispatcher *dispatcher)
 {
     return dispatcher->recv_fd;
 }
+
+static gboolean dispatch_cb(GIOChannel *source, GIOCondition condition,
+                            gpointer data)
+{
+    Dispatcher *dispatcher = data;
+
+    spice_debug(NULL);
+    dispatcher_handle_recv_read(dispatcher);
+
+    /* FIXME: remove source cb if error */
+    return TRUE;
+}
+
+void dispatcher_attach(Dispatcher *dispatcher, GMainContext *main_context)
+{
+    spice_return_if_fail(dispatcher != NULL);
+    spice_return_if_fail(main_context != NULL);
+
+    GIOChannel *channel = g_io_channel_unix_new(dispatcher->recv_fd);
+    GSource *source = g_io_create_watch(channel, G_IO_IN);
+
+    g_source_set_callback(source, (GSourceFunc)dispatch_cb, dispatcher, NULL);
+    g_source_attach(source, main_context);
+    g_source_unref(source);
+}

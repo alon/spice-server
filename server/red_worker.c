@@ -11846,6 +11846,8 @@ static void worker_dispatcher_record(void *opaque, uint32_t message_type, void *
 
 static void worker_dispatcher_register(RedWorker *worker, Dispatcher *dispatcher)
 {
+    dispatcher_set_opaque(dispatcher, worker);
+
     dispatcher_register_extra_handler(dispatcher, worker_dispatcher_record);
     dispatcher_register_async_done_callback(dispatcher,
                                             worker_handle_dispatcher_async_done);
@@ -12025,20 +12027,10 @@ static void worker_dispatcher_register(RedWorker *worker, Dispatcher *dispatcher
                                 handle_dev_driver_unload,
                                 sizeof(RedWorkerMessageDriverUnload),
                                 DISPATCHER_NONE);
+
+    dispatcher_attach(dispatcher, worker->main_context);
 }
 
-
-
-static gboolean worker_dispatcher_cb(GIOChannel *source, GIOCondition condition,
-                                     gpointer data)
-{
-    RedWorker *worker = data;
-
-    spice_debug(NULL);
-    dispatcher_handle_recv_read(red_dispatcher_get_dispatcher(worker->red_dispatcher));
-
-    return TRUE;
-}
 
 typedef struct _RedWorkerSource {
     GSource source;
@@ -12129,13 +12121,12 @@ RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher)
         }
     }
     dispatcher = red_dispatcher_get_dispatcher(red_dispatcher);
-    dispatcher_set_opaque(dispatcher, worker);
+    worker_dispatcher_register(worker, dispatcher);
 
     worker->red_dispatcher = red_dispatcher;
     worker->qxl = qxl;
     worker->id = qxl->id;
     worker->channel = dispatcher_get_recv_fd(dispatcher);
-    worker_dispatcher_register(worker, dispatcher);
     worker->cursor_visible = TRUE;
     spice_assert(num_renderers > 0);
     worker->num_renderers = num_renderers;
@@ -12164,13 +12155,7 @@ RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher)
     worker->command_counter = stat_add_counter(worker->stat, "commands", TRUE);
 #endif
 
-    GIOChannel *channel = g_io_channel_unix_new(dispatcher_get_recv_fd(dispatcher));
-    GSource *source = g_io_create_watch(channel, G_IO_IN);
-    g_source_set_callback(source, (GSourceFunc)worker_dispatcher_cb, worker, NULL);
-    g_source_attach(source, worker->main_context);
-    g_source_unref(source);
-
-    source = g_source_new(&worker_source_funcs, sizeof(RedWorkerSource));
+    GSource *source = g_source_new(&worker_source_funcs, sizeof(RedWorkerSource));
     RedWorkerSource *wsource = (RedWorkerSource *)source;
     wsource->worker = worker;
     g_source_attach(source, worker->main_context);
