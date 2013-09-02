@@ -928,7 +928,7 @@ typedef struct RedWorker {
     uint32_t repoll_cmd_ring;
     uint32_t repoll_cursor_ring;
     uint32_t num_renderers;
-    uint32_t renderers[RED_MAX_RENDERERS];
+    uint32_t renderers[RED_RENDERER_LAST];
     uint32_t renderer;
 
     RedSurface surfaces[NUM_SURFACES];

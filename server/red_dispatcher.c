@@ -228,7 +228,7 @@ static RendererInfo renderers_info[] = {
     {RED_RENDERER_INVALID, NULL},
 };
 
-static uint32_t renderers[RED_MAX_RENDERERS];
+static uint32_t renderers[RED_RENDERER_LAST];
 static uint32_t num_renderers = 0;
 
 static RendererInfo *find_renderer(const char *name)
@@ -247,7 +247,7 @@ int red_dispatcher_add_renderer(const char *name)
 {
     RendererInfo *inf;
 
-    if (num_renderers == RED_MAX_RENDERERS || !(inf = find_renderer(name))) {
+    if (num_renderers == RED_RENDERER_LAST || !(inf = find_renderer(name))) {
         return FALSE;
     }
     renderers[num_renderers++] = inf->id;
