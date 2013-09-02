@@ -11415,7 +11415,7 @@ void handle_dev_display_channel_create(void *opaque, void *payload)
     // TODO: handle seemless migration. Temp, setting migrate to FALSE
     display_channel_create(worker, FALSE);
     red_channel = &worker->display_channel->common.base;
-    send_data(worker->channel, &red_channel, sizeof(RedChannel *));
+    xwrite(worker->channel, &red_channel, sizeof(RedChannel *));
 }
 
 void handle_dev_display_connect(void *opaque, void *payload)
@@ -11498,7 +11498,7 @@ void handle_dev_cursor_channel_create(void *opaque, void *payload)
     // TODO: handle seemless migration. Temp, setting migrate to FALSE
     cursor_channel_create(worker, FALSE);
     red_channel = &worker->cursor_channel->common.base;
-    send_data(worker->channel, &red_channel, sizeof(RedChannel *));
+    xwrite(worker->channel, &red_channel, sizeof(RedChannel *));
 }
 
 void handle_dev_cursor_connect(void *opaque, void *payload)

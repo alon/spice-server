@@ -1056,7 +1056,7 @@ static RedChannel *red_dispatcher_display_channel_create(RedDispatcher *dispatch
     dispatcher_send_message(&dispatcher->dispatcher,
                             RED_WORKER_MESSAGE_DISPLAY_CHANNEL_CREATE,
                             &payload);
-    receive_data(dispatcher->dispatcher.send_fd, &display_channel, sizeof(RedChannel *));
+    xread(dispatcher->dispatcher.send_fd, &display_channel, sizeof(RedChannel *));
     return display_channel;
 }
 
@@ -1068,7 +1068,7 @@ static RedChannel *red_dispatcher_cursor_channel_create(RedDispatcher *dispatche
     dispatcher_send_message(&dispatcher->dispatcher,
                             RED_WORKER_MESSAGE_CURSOR_CHANNEL_CREATE,
                             &payload);
-    receive_data(dispatcher->dispatcher.send_fd, &cursor_channel, sizeof(RedChannel *));
+    xread(dispatcher->dispatcher.send_fd, &cursor_channel, sizeof(RedChannel *));
     return cursor_channel;
 }
 

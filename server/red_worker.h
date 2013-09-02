@@ -20,6 +20,7 @@
 
 #include <unistd.h>
 #include <errno.h>
+#include "spice_server_utils.h"
 #include "red_common.h"
 
 enum {
@@ -107,46 +108,14 @@ typedef struct WorkerInitData {
 
 void *red_worker_main(void *arg);
 
-static inline void send_data(int fd, void *in_buf, int n)
-{
-    uint8_t *buf = in_buf;
-    do {
-        int now;
-        if ((now = write(fd, buf, n)) == -1) {
-            if (errno == EINTR) {
-                continue;
-            }
-            spice_error("%s", strerror(errno));
-        }
-        buf += now;
-        n -= now;
-    } while (n);
-}
-
 static inline void write_message(int fd, RedWorkerMessage *message)
 {
-    send_data(fd, message, sizeof(RedWorkerMessage));
-}
-
-static inline void receive_data(int fd, void *in_buf, int n)
-{
-    uint8_t *buf = in_buf;
-    do {
-        int now;
-        if ((now = read(fd, buf, n)) == -1) {
-            if (errno == EINTR) {
-                continue;
-            }
-            spice_error("%s", strerror(errno));
-        }
-        buf += now;
-        n -= now;
-    } while (n);
+    xwrite(fd, message, sizeof(RedWorkerMessage));
 }
 
 static inline void read_message(int fd, RedWorkerMessage *message)
 {
-    receive_data(fd, message, sizeof(RedWorkerMessage));
+    xread(fd, message, sizeof(RedWorkerMessage));
 }
 
 #endif
