@@ -89,6 +89,8 @@
 #include "spice_bitmap_utils.h"
 #include "spice_image_cache.h"
 #include "pixmap_cache.h"
+#include "display_channel.h"
+#include "cursor_channel.h"
 
 //#define COMPRESS_STAT
 //#define DUMP_BITMAP
@@ -130,12 +132,8 @@
 #define FPS_TEST_INTERVAL 1
 #define MAX_FPS 30
 
-#define RED_COMPRESS_BUF_SIZE (1024 * 64)
-
 #define ZLIB_DEFAULT_COMPRESSION_LEVEL 3
 #define MIN_GLZ_SIZE_FOR_ZLIB 100
-
-typedef int64_t red_time_t;
 
 #define VALIDATE_SURFACE_RET(worker, surface_id) \
     if (!validate_surface(worker, surface_id)) { \
@@ -305,21 +303,6 @@ typedef struct VerbItem {
 
 #define MAX_LZ_ENCODERS MAX_CACHE_CLIENTS
 
-typedef struct CacheItem CacheItem;
-
-struct CacheItem {
-    union {
-        PipeItem pipe_data;
-        struct {
-            RingItem lru_link;
-            CacheItem *next;
-        } cache_data;
-    } u;
-    uint64_t id;
-    size_t size;
-    uint32_t inval_type;
-};
-
 typedef struct SurfaceCreateItem {
     SpiceMsgSurfaceCreate surface_create;
     PipeItem pipe_item;
@@ -348,44 +331,12 @@ typedef struct StreamActivateReportItem {
     uint32_t stream_id;
 } StreamActivateReportItem;
 
-typedef struct CursorItem {
-    uint32_t group_id;
-    int refs;
-    RedCursorCmd *red_cursor;
-} CursorItem;
-
-typedef struct CursorPipeItem {
-    PipeItem base;
-    CursorItem *cursor_item;
-    int refs;
-} CursorPipeItem;
-
-typedef struct LocalCursor {
-    CursorItem base;
-    SpicePoint16 position;
-    uint32_t data_size;
-    SpiceCursor red_cursor;
-} LocalCursor;
-
 #define MAX_PIPE_SIZE 50
-#define CHANNEL_RECEIVE_BUF_SIZE 1024
 
 #define WIDE_CLIENT_ACK_WINDOW 40
 #define NARROW_CLIENT_ACK_WINDOW 20
 
-#define CLIENT_CURSOR_CACHE_SIZE 256
-
-#define CURSOR_CACHE_HASH_SHIFT 8
-#define CURSOR_CACHE_HASH_SIZE (1 << CURSOR_CACHE_HASH_SHIFT)
-#define CURSOR_CACHE_HASH_MASK (CURSOR_CACHE_HASH_SIZE - 1)
-#define CURSOR_CACHE_HASH_KEY(id) ((id) & CURSOR_CACHE_HASH_MASK)
-
 #define CLIENT_PALETTE_CACHE_SIZE 128
-
-#define PALETTE_CACHE_HASH_SHIFT 8
-#define PALETTE_CACHE_HASH_SIZE (1 << PALETTE_CACHE_HASH_SHIFT)
-#define PALETTE_CACHE_HASH_MASK (PALETTE_CACHE_HASH_SIZE - 1)
-#define PALETTE_CACHE_HASH_KEY(id) ((id) & PALETTE_CACHE_HASH_MASK)
 
 typedef struct ImageItem {
     PipeItem link;
@@ -402,8 +353,6 @@ typedef struct ImageItem {
     uint8_t data[0];
 } ImageItem;
 
-typedef struct Drawable Drawable;
-
 typedef struct DisplayChannel DisplayChannel;
 
 enum {
@@ -411,66 +360,6 @@ enum {
     STREAM_FRAME_NATIVE,
     STREAM_FRAME_CONTAINER,
 };
-
-typedef struct Stream Stream;
-struct Stream {
-    uint8_t refs;
-    Drawable *current;
-    red_time_t last_time;
-    int width;
-    int height;
-    SpiceRect dest_area;
-    int top_down;
-    Stream *next;
-    RingItem link;
-
-    guint input_fps_timer;
-    uint32_t num_input_frames;
-    uint64_t input_fps_timer_start;
-    uint32_t input_fps;
-};
-
-#define STREAM_STATS
-#ifdef STREAM_STATS
-typedef struct StreamStats {
-   uint64_t num_drops_pipe;
-   uint64_t num_drops_fps;
-   uint64_t num_frames_sent;
-   uint64_t num_input_frames;
-   uint64_t size_sent;
-
-   uint64_t start;
-   uint64_t end;
-} StreamStats;
-#endif
-
-typedef struct StreamAgent {
-    QRegion vis_region; /* the part of the surface area that is currently occupied by video
-                           fragments */
-    QRegion clip;       /* the current video clipping. It can be different from vis_region:
-                           for example, let c1 be the clip area at time t1, and c2
-                           be the clip area at time t2, where t1 < t2. If c1 contains c2, and
-                           at least part of c1/c2, hasn't been covered by a non-video images,
-                           vis_region will contain c2 and also the part of c1/c2 that still
-                           displays fragments of the video */
-
-    PipeItem create_item;
-    PipeItem destroy_item;
-    Stream *stream;
-    uint64_t last_send_time;
-    MJpegEncoder *mjpeg_encoder;
-    DisplayChannelClient *dcc;
-
-    int frames;
-    int drops;
-    int fps;
-
-    uint32_t report_id;
-    uint32_t client_required_latency;
-#ifdef STREAM_STATS
-    StreamStats stats;
-#endif
-} StreamAgent;
 
 typedef struct StreamClipItem {
     PipeItem base;
@@ -480,53 +369,12 @@ typedef struct StreamClipItem {
     SpiceClipRects *rects;
 } StreamClipItem;
 
-typedef struct RedCompressBuf RedCompressBuf;
-struct RedCompressBuf {
-    uint32_t buf[RED_COMPRESS_BUF_SIZE / 4];
-    RedCompressBuf *next;
-    RedCompressBuf *send_next;
-};
-
 static const int BITMAP_FMT_IS_PLT[] = {0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0};
 static const int BITMAP_FMP_BYTES_PER_PIXEL[] = {0, 0, 0, 0, 0, 1, 2, 3, 4, 4, 1};
 
 #define BITMAP_FMT_HAS_GRADUALITY(f)                                    \
     (bitmap_fmt_is_rgb(f)        &&                                     \
      ((f) != SPICE_BITMAP_FMT_8BIT_A))
-
-#define NUM_STREAMS 50
-
-typedef struct WaitForChannels {
-    SpiceMsgWaitForChannels header;
-    SpiceWaitForChannel buf[MAX_CACHE_CLIENTS];
-} WaitForChannels;
-
-typedef struct FreeList {
-    int res_size;
-    SpiceResourceList *res;
-    uint64_t sync[MAX_CACHE_CLIENTS];
-    WaitForChannels wait;
-} FreeList;
-
-typedef struct  {
-    DisplayChannelClient *dcc;
-    RedCompressBuf *bufs_head;
-    RedCompressBuf *bufs_tail;
-    jmp_buf jmp_env;
-    union {
-        struct {
-            SpiceChunks *chunks;
-            int next;
-            int stride;
-            int reverse;
-        } lines_data;
-        struct {
-            RedCompressBuf* next;
-            int size_left;
-        } compressed_data; // for encoding data that was already compressed by another method
-    } u;
-    char message_buf[512];
-} EncoderData;
 
 typedef struct {
     QuicUsrContext usr;
@@ -537,11 +385,6 @@ typedef struct {
     LzUsrContext usr;
     EncoderData data;
 } LzData;
-
-typedef struct {
-    GlzEncoderUsrContext usr;
-    EncoderData data;
-} GlzData;
 
 typedef struct {
     JpegEncoderUsrContext usr;
@@ -589,83 +432,6 @@ struct RedGlzDrawable {
 pthread_mutex_t glz_dictionary_list_lock = PTHREAD_MUTEX_INITIALIZER;
 Ring glz_dictionary_list = {&glz_dictionary_list, &glz_dictionary_list};
 
-typedef struct GlzSharedDictionary {
-    RingItem base;
-    GlzEncDictContext *dict;
-    uint32_t refs;
-    uint8_t id;
-    pthread_rwlock_t encode_lock;
-    int migrate_freeze;
-    RedClient *client; // channel clients of the same client share the dict
-} GlzSharedDictionary;
-
-#define NUM_SURFACES 10000
-
-typedef struct CommonChannel {
-    RedChannel base; // Must be the first thing
-    struct RedWorker *worker;
-    uint8_t recv_buf[CHANNEL_RECEIVE_BUF_SIZE];
-    uint32_t id_alloc; // bitfield. TODO - use this instead of shift scheme.
-    int during_target_migrate; /* TRUE when the client that is associated with the channel
-                                  is during migration. Turned off when the vm is started.
-                                  The flag is used to avoid sending messages that are artifacts
-                                  of the transition from stopped vm to loaded vm (e.g., recreation
-                                  of the primary surface) */
-} CommonChannel;
-
-typedef struct CommonChannelClient {
-    RedChannelClient base;
-    uint32_t id;
-    struct RedWorker *worker;
-    int is_low_bandwidth;
-} CommonChannelClient;
-
-/* Each drawable can refer to at most 3 images: src, brush and mask */
-#define MAX_DRAWABLE_PIXMAP_CACHE_ITEMS 3
-
-struct _DisplayChannelClient {
-    CommonChannelClient common;
-
-    int expect_init;
-
-    PixmapCache *pixmap_cache;
-    uint32_t pixmap_cache_generation;
-    int pending_pixmaps_sync;
-
-    CacheItem *palette_cache[PALETTE_CACHE_HASH_SIZE];
-    Ring palette_cache_lru;
-    long palette_cache_available;
-    uint32_t palette_cache_items;
-
-    struct {
-        uint32_t stream_outbuf_size;
-        uint8_t *stream_outbuf; // caution stream buffer is also used as compress bufs!!!
-
-        RedCompressBuf *used_compress_bufs;
-
-        FreeList free_list;
-        uint64_t pixmap_cache_items[MAX_DRAWABLE_PIXMAP_CACHE_ITEMS];
-        int num_pixmap_cache_items;
-    } send_data;
-
-    /* global lz encoding entities */
-    GlzSharedDictionary *glz_dict;
-    GlzEncoderContext   *glz;
-    GlzData glz_data;
-
-    Ring glz_drawables;               // all the living lz drawable, ordered by encoding time
-    Ring glz_drawables_inst_to_free;               // list of instances to be freed
-    pthread_mutex_t glz_drawables_inst_to_free_lock;
-
-    uint8_t surface_client_created[NUM_SURFACES];
-    QRegion surface_client_lossy_region[NUM_SURFACES];
-
-    StreamAgent stream_agents[NUM_STREAMS];
-    int use_mjpeg_encoder_rate_control;
-    uint32_t streams_max_latency;
-    uint64_t streams_max_bit_rate;
-};
-
 struct DisplayChannel {
     CommonChannel common; // Must be the first thing
 
@@ -691,23 +457,6 @@ struct DisplayChannel {
     stat_info_t jpeg_alpha_stat;
 #endif
 };
-
-typedef struct CursorChannelClient {
-    CommonChannelClient common;
-
-    CacheItem *cursor_cache[CURSOR_CACHE_HASH_SIZE];
-    Ring cursor_cache_lru;
-    long cursor_cache_available;
-    uint32_t cursor_cache_items;
-} CursorChannelClient;
-
-typedef struct CursorChannel {
-    CommonChannel common; // Must be the first thing
-
-#ifdef RED_STATISTICS
-    StatNodeRef stat;
-#endif
-} CursorChannel;
 
 enum {
     TREE_ITEM_TYPE_DRAWABLE,
@@ -806,14 +555,6 @@ struct _Drawable {
     union {
         Drawable drawable;
         _Drawable *next;
-    } u;
-};
-
-typedef struct _CursorItem _CursorItem;
-struct _CursorItem {
-    union {
-        CursorItem cursor_item;
-        _CursorItem *next;
     } u;
 };
 
@@ -12118,7 +11859,6 @@ RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher)
     RedWorker *worker;
     Dispatcher *dispatcher;
     const char *record_filename;
-    spice_assert(sizeof(CursorItem) <= QXL_CURSUR_DEVICE_DATA_SIZE);
 
     qxl->st->qif->get_init_info(qxl, &init_info);
 
