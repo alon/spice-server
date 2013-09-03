@@ -8467,8 +8467,6 @@ static void red_display_marshall_stream_end(RedChannelClient *rcc,
     spice_marshall_msg_display_stream_destroy(base_marshaller, &destroy);
 }
 
-#define RCC_TO_CCC(rcc) SPICE_CONTAINEROF((rcc), CursorChannelClient, common.base)
-
 static void red_marshall_surface_create(RedChannelClient *rcc,
     SpiceMarshaller *base_marshaller, SpiceMsgSurfaceCreate *surface_create)
 {
@@ -9541,7 +9539,7 @@ static int common_channel_config_socket(RedChannelClient *rcc)
     RedClient *client = red_channel_client_get_client(rcc);
     MainChannelClient *mcc = red_client_get_main(client);
     RedsStream *stream = red_channel_client_get_stream(rcc);
-    CommonChannelClient *ccc = SPICE_CONTAINEROF(rcc, CommonChannelClient, base);
+    CommonChannelClient *ccc = COMMON_CHANNEL_CLIENT(rcc);
     int flags;
     int delay_val;
 
@@ -10124,14 +10122,14 @@ static void red_connect_cursor(RedWorker *worker, RedClient *client, RedsStream 
                                     caps, num_caps);
     spice_return_if_fail(ccc != NULL);
 
-    RedChannelClient *rcc = &ccc->common.base;
+    RedChannelClient *rcc = RED_CHANNEL_CLIENT(ccc);
     red_channel_client_ack_zero_messages_window(rcc);
     red_channel_client_push_set_ack(rcc);
+
     // TODO: why do we check for context.canvas? defer this to after display cc is connected
     // and test it's canvas? this is just a test to see if there is an active renderer?
-    if (worker->surfaces[0].context.canvas && !COMMON_CHANNEL(channel)->during_target_migrate) {
-        red_channel_client_pipe_add_type(rcc, PIPE_ITEM_TYPE_CURSOR_INIT);
-    }
+    if (worker->surfaces[0].context.canvas)
+        cursor_channel_init(channel, ccc);
 }
 
 typedef struct __attribute__ ((__packed__)) CursorData {
@@ -10481,9 +10479,7 @@ static void dev_create_primary_surface(RedWorker *worker, uint32_t surface_id,
         red_channel_push(&worker->display_channel->common.base);
     }
 
-    if (!COMMON_CHANNEL(worker->cursor_channel)->during_target_migrate)
-        red_channel_pipes_add_type(RED_CHANNEL(worker->cursor_channel),
-                                   PIPE_ITEM_TYPE_CURSOR_INIT);
+    cursor_channel_init(worker->cursor_channel, NULL);
 }
 
 void handle_dev_create_primary_surface(void *opaque, uint32_t message_type, void *payload)
@@ -10851,11 +10847,7 @@ void handle_dev_cursor_migrate(void *opaque, uint32_t message_type, void *payloa
     RedChannelClient *rcc = msg->rcc;
 
     spice_info("migrate cursor client");
-    if (!red_channel_client_is_connected(rcc))
-        return;
-
-    red_channel_client_pipe_add_type(rcc, PIPE_ITEM_TYPE_INVAL_CURSOR_CACHE);
-    red_channel_client_default_migrate(rcc);
+    cursor_channel_client_migrate(CURSOR_CHANNEL_CLIENT(rcc));
 }
 
 void handle_dev_set_compression(void *opaque, uint32_t message_type, void *payload)

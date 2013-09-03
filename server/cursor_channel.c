@@ -1,6 +1,41 @@
 #include "common/generated_server_marshallers.h"
 #include "cursor_channel.h"
 
+#define CLIENT_CURSOR_CACHE_SIZE 256
+
+#define CURSOR_CACHE_HASH_SHIFT 8
+#define CURSOR_CACHE_HASH_SIZE (1 << CURSOR_CACHE_HASH_SHIFT)
+#define CURSOR_CACHE_HASH_MASK (CURSOR_CACHE_HASH_SIZE - 1)
+#define CURSOR_CACHE_HASH_KEY(id) ((id) & CURSOR_CACHE_HASH_MASK)
+
+enum {
+    PIPE_ITEM_TYPE_CURSOR = PIPE_ITEM_TYPE_COMMON_LAST,
+    PIPE_ITEM_TYPE_CURSOR_INIT,
+    PIPE_ITEM_TYPE_INVAL_CURSOR_CACHE,
+};
+
+typedef struct _CursorItem {
+    QXLInstance *qxl;
+    uint32_t group_id;
+    int refs;
+    RedCursorCmd *red_cursor;
+} CursorItem;
+
+G_STATIC_ASSERT(sizeof(CursorItem) <= QXL_CURSUR_DEVICE_DATA_SIZE);
+
+typedef struct LocalCursor {
+    CursorItem base;
+    SpicePoint16 position;
+    uint32_t data_size;
+    SpiceCursor red_cursor;
+} LocalCursor;
+
+typedef struct CursorPipeItem {
+    PipeItem base;
+    CursorItem *cursor_item;
+    int refs;
+} CursorPipeItem;
+
 struct _CursorChannel {
     CommonChannel common; // Must be the first thing
 
@@ -16,13 +51,23 @@ struct _CursorChannel {
 #endif
 };
 
+struct _CursorChannelClient {
+    CommonChannelClient common;
+
+    CacheItem *cursor_cache[CURSOR_CACHE_HASH_SIZE];
+    Ring cursor_cache_lru;
+    long cursor_cache_available;
+    uint32_t cursor_cache_items;
+};
+
+
 #define RCC_TO_CCC(rcc) SPICE_CONTAINEROF((rcc), CursorChannelClient, common.base)
 
 #define CLIENT_CURSOR_CACHE
 #include "cache_item.tmpl.c"
 #undef CLIENT_CURSOR_CACHE
 
-CursorItem *cursor_item_new(QXLInstance *qxl, RedCursorCmd *cmd, uint32_t group_id)
+static CursorItem *cursor_item_new(QXLInstance *qxl, RedCursorCmd *cmd, uint32_t group_id)
 {
     CursorItem *cursor_item;
 
@@ -37,7 +82,7 @@ CursorItem *cursor_item_new(QXLInstance *qxl, RedCursorCmd *cmd, uint32_t group_
     return cursor_item;
 }
 
-CursorItem *cursor_item_ref(CursorItem *item)
+static CursorItem *cursor_item_ref(CursorItem *item)
 {
     spice_return_val_if_fail(item != NULL, NULL);
     spice_return_val_if_fail(item->refs > 0, NULL);
@@ -47,7 +92,7 @@ CursorItem *cursor_item_ref(CursorItem *item)
     return item;
 }
 
-void cursor_item_unref(CursorItem *item)
+static void cursor_item_unref(CursorItem *item)
 {
     QXLReleaseInfoExt release_info_ext;
     RedCursorCmd *cursor_cmd;
@@ -386,6 +431,17 @@ CursorChannel* cursor_channel_new(RedWorker *worker)
     return cursor;
 }
 
+void cursor_channel_client_migrate(CursorChannelClient* client)
+{
+    RedChannelClient *rcc;
+
+    spice_return_if_fail(client);
+    rcc = RED_CHANNEL_CLIENT(client);
+
+    red_channel_client_pipe_add_type(rcc, PIPE_ITEM_TYPE_INVAL_CURSOR_CACHE);
+    red_channel_client_default_migrate(rcc);
+}
+
 CursorChannelClient* cursor_channel_client_new(CursorChannel *cursor, RedClient *client, RedsStream *stream,
                                                int mig_target,
                                                uint32_t *common_caps, int num_common_caps,
@@ -482,6 +538,22 @@ void cursor_channel_reset(CursorChannel *cursor)
                                       red_channel_client_disconnect_if_pending_send);
         }
     }
+}
+
+void cursor_channel_init(CursorChannel *cursor, CursorChannelClient *client)
+{
+    spice_return_if_fail(cursor);
+
+    if (COMMON_CHANNEL(cursor)->during_target_migrate) {
+        spice_debug("during_target_migrate: skip init");
+        return;
+    }
+
+    if (client)
+        red_channel_client_pipe_add_type(RED_CHANNEL_CLIENT(client),
+                                         PIPE_ITEM_TYPE_CURSOR_INIT);
+    else
+        red_channel_pipes_add_type(RED_CHANNEL(cursor), PIPE_ITEM_TYPE_CURSOR_INIT);
 }
 
 void cursor_channel_set_mouse_mode(CursorChannel *cursor, uint32_t mode)

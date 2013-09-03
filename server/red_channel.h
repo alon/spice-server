@@ -307,6 +307,8 @@ struct RedChannelClient {
     RedChannelClientConnectivityMonitor connectivity_monitor;
 };
 
+#define RED_CHANNEL_CLIENT(Client) ((RedChannelClient *)(Client))
+
 struct RedChannel {
     uint32_t type;
     uint32_t id;
