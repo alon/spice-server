@@ -24,37 +24,4 @@ static inline int test_bit(int index, uint32_t val)
 {
     return val & (1u << index);
 }
-
-static inline void xwrite(int fd, void *in_buf, int n)
-{
-    uint8_t *buf = in_buf;
-    do {
-        int now;
-        if ((now = write(fd, buf, n)) == -1) {
-            if (errno == EINTR) {
-                continue;
-            }
-            spice_error("%s", strerror(errno));
-        }
-        buf += now;
-        n -= now;
-    } while (n);
-}
-
-static inline void xread(int fd, void *in_buf, int n)
-{
-    uint8_t *buf = in_buf;
-    do {
-        int now;
-        if ((now = read(fd, buf, n)) == -1) {
-            if (errno == EINTR) {
-                continue;
-            }
-            spice_error("%s", strerror(errno));
-        }
-        buf += now;
-        n -= now;
-    } while (n);
-}
-
 #endif
