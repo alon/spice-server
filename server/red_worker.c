@@ -602,8 +602,8 @@ typedef struct RedWorker {
     CursorChannel *cursor_channel;
     QXLInstance *qxl;
     RedDispatcher *red_dispatcher;
+    int dispatcher_reply_fd;
 
-    int channel;
     int id;
     int running;
 
@@ -10724,7 +10724,7 @@ void handle_dev_display_channel_create(void *opaque, uint32_t message_type, void
     // TODO: handle seemless migration. Temp, setting migrate to FALSE
     display_channel_create(worker, FALSE);
     red_channel = &worker->display_channel->common.base;
-    xwrite(worker->channel, &red_channel, sizeof(RedChannel *));
+    xwrite(worker->dispatcher_reply_fd, &red_channel, sizeof(RedChannel *));
 }
 
 void handle_dev_display_connect(void *opaque, uint32_t message_type, void *payload)
@@ -10813,7 +10813,7 @@ void handle_dev_cursor_channel_create(void *opaque, uint32_t message_type, void 
     }
 
     red_channel = RED_CHANNEL(worker->cursor_channel);
-    xwrite(worker->channel, &red_channel, sizeof(RedChannel *));
+    xwrite(worker->dispatcher_reply_fd, &red_channel, sizeof(RedChannel *));
 }
 
 void handle_dev_cursor_connect(void *opaque, uint32_t message_type, void *payload)
@@ -11291,7 +11291,7 @@ RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher)
     worker->red_dispatcher = red_dispatcher;
     worker->qxl = qxl;
     worker->id = qxl->id;
-    worker->channel = dispatcher_get_recv_fd(dispatcher);
+    worker->dispatcher_reply_fd = dispatcher_get_recv_fd(dispatcher);
     spice_assert(num_renderers > 0);
     worker->num_renderers = num_renderers;
     memcpy(worker->renderers, renderers, sizeof(worker->renderers));
