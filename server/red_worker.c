@@ -598,17 +598,18 @@ typedef struct RedWorker {
     pthread_t thread;
     clockid_t clockid;
     GMainContext *main_context;
-    DisplayChannel *display_channel;
-    CursorChannel *cursor_channel;
     QXLInstance *qxl;
     RedDispatcher *red_dispatcher;
     int dispatcher_reply_fd;
-
     int running;
-
     gint timeout;
+
+    DisplayChannel *display_channel;
     uint32_t repoll_cmd_ring;
+
+    CursorChannel *cursor_channel;
     uint32_t repoll_cursor_ring;
+
     uint32_t num_renderers;
     uint32_t renderers[RED_RENDERER_LAST];
     uint32_t renderer;
