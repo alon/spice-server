@@ -1,6 +1,21 @@
 #include "common/generated_server_marshallers.h"
 #include "cursor_channel.h"
 
+struct _CursorChannel {
+    CommonChannel common; // Must be the first thing
+
+    CursorItem *item;
+    int cursor_visible;
+    SpicePoint16 cursor_position;
+    uint16_t cursor_trail_length;
+    uint16_t cursor_trail_frequency;
+    uint32_t mouse_mode;
+
+#ifdef RED_STATISTICS
+    StatNodeRef stat;
+#endif
+};
+
 #define RCC_TO_CCC(rcc) SPICE_CONTAINEROF((rcc), CursorChannelClient, common.base)
 
 #define CLIENT_CURSOR_CACHE
@@ -361,10 +376,9 @@ CursorChannel* cursor_channel_new(RedWorker *worker)
     };
 
     spice_info("create cursor channel");
-    channel = red_worker_new_channel(worker, sizeof(CursorChannel),
+    channel = red_worker_new_channel(worker, sizeof(CursorChannel), "cursor_channel",
                                      SPICE_CHANNEL_CURSOR, 0,
                                      &cbs, red_channel_client_handle_message);
-
     cursor = (CursorChannel *)channel;
     cursor->cursor_visible = TRUE;
     cursor->mouse_mode = SPICE_MOUSE_MODE_SERVER;
@@ -468,4 +482,11 @@ void cursor_channel_reset(CursorChannel *cursor)
                                       red_channel_client_disconnect_if_pending_send);
         }
     }
+}
+
+void cursor_channel_set_mouse_mode(CursorChannel *cursor, uint32_t mode)
+{
+    spice_return_if_fail(cursor);
+
+    cursor->mouse_mode = mode;
 }

@@ -32,6 +32,7 @@
 #include "red_common.h"
 #include "demarshallers.h"
 #include "reds_stream.h"
+#include "stat.h"
 
 #define MAX_SEND_BUFS 1000
 #define CLIENT_ACK_WINDOW 20
@@ -132,6 +133,7 @@ typedef struct BufDescriptor {
     uint8_t *data;
 } BufDescriptor;
 
+typedef struct RedsStream RedsStream;
 typedef struct RedChannel RedChannel;
 typedef struct RedChannelClient RedChannelClient;
 typedef struct RedClient RedClient;
@@ -340,9 +342,12 @@ struct RedChannel {
     // TODO: when different channel_clients are in different threads from Channel -> need to protect!
     pthread_t thread_id;
 #ifdef RED_STATISTICS
+    StatNodeRef stat;
     uint64_t *out_bytes_counter;
 #endif
 };
+
+#define RED_CHANNEL(Channel) ((RedChannel *)(Channel))
 
 /*
  * When an error occurs over a channel, we treat it as a warning
@@ -375,6 +380,7 @@ RedChannel *red_channel_create_parser(int size,
                                channel_handle_parsed_proc handle_parsed,
                                ChannelCbs *channel_cbs,
                                uint32_t migration_flags);
+void red_channel_set_stat_node(RedChannel *channel, StatNodeRef stat);
 
 void red_channel_register_client_cbs(RedChannel *channel, ClientCbs *client_cbs);
 // caps are freed when the channel is destroyed

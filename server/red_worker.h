@@ -30,6 +30,7 @@ typedef struct RedWorker RedWorker;
 
 typedef struct CommonChannelClient {
     RedChannelClient base;
+
     uint32_t id;
     struct RedWorker *worker;
     int is_low_bandwidth;
@@ -41,6 +42,7 @@ typedef struct CommonChannelClient {
 #define CHANNEL_RECEIVE_BUF_SIZE 1024
 typedef struct CommonChannel {
     RedChannel base; // Must be the first thing
+
     struct RedWorker *worker;
     uint8_t recv_buf[CHANNEL_RECEIVE_BUF_SIZE];
     uint32_t id_alloc; // bitfield. TODO - use this instead of shift scheme.
@@ -50,6 +52,8 @@ typedef struct CommonChannel {
                                   of the transition from stopped vm to loaded vm (e.g., recreation
                                   of the primary surface) */
 } CommonChannel;
+
+#define COMMON_CHANNEL(Channel) ((CommonChannel*)(Channel))
 
 enum {
     PIPE_ITEM_TYPE_VERB = PIPE_ITEM_TYPE_CHANNEL_BASE,
@@ -107,6 +111,7 @@ bool       red_worker_run(RedWorker *worker);
 QXLInstance* red_worker_get_qxl(RedWorker *worker);
 
 RedChannel *red_worker_new_channel(RedWorker *worker, int size,
+                                   const char *name,
                                    uint32_t channel_type, int migration_flags,
                                    ChannelCbs *channel_cbs,
                                    channel_handle_parsed_proc handle_parsed);

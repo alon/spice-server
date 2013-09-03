@@ -1155,7 +1155,19 @@ RedChannel *red_channel_create_parser(int size,
     }
     channel->incoming_cb.handle_parsed = (handle_parsed_proc)handle_parsed;
     channel->incoming_cb.parser = parser;
+
     return channel;
+}
+
+void red_channel_set_stat_node(RedChannel *channel, StatNodeRef stat)
+{
+    spice_return_if_fail(channel != NULL);
+    spice_return_if_fail(channel->stat == 0);
+
+#ifdef RED_STATISTICS
+    channel->stat = stat;
+    channel->out_bytes_counter = stat_add_counter(stat, "out_bytes", TRUE);
+#endif
 }
 
 void red_channel_register_client_cbs(RedChannel *channel, ClientCbs *client_cbs)
