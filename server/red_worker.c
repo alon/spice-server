@@ -604,7 +604,6 @@ typedef struct RedWorker {
     RedDispatcher *red_dispatcher;
     int dispatcher_reply_fd;
 
-    int id;
     int running;
 
     gint timeout;
@@ -9751,7 +9750,7 @@ CommonChannelClient *common_channel_new_client(CommonChannel *common,
     }
     CommonChannelClient *common_cc = (CommonChannelClient*)rcc;
     common_cc->worker = common->worker;
-    common_cc->id = common->worker->id;
+    common_cc->id = common->worker->qxl->id;
     common->during_target_migrate = mig_target;
 
     // TODO: move wide/narrow ack setting to red_channel.
@@ -9804,7 +9803,7 @@ RedChannel *red_worker_new_channel(RedWorker *worker, int size,
     channel_cbs->release_recv_buf = common_release_recv_buf;
 
     channel = red_channel_create_parser(size, &worker_core,
-                                        channel_type, worker->id,
+                                        channel_type, worker->qxl->id,
                                         TRUE /* handle_acks */,
                                         spice_get_client_channel_parser(channel_type, NULL),
                                         handle_parsed,
@@ -11290,7 +11289,6 @@ RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher)
 
     worker->red_dispatcher = red_dispatcher;
     worker->qxl = qxl;
-    worker->id = qxl->id;
     worker->dispatcher_reply_fd = dispatcher_get_recv_fd(dispatcher);
     spice_assert(num_renderers > 0);
     worker->num_renderers = num_renderers;
@@ -11311,7 +11309,7 @@ RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher)
     stat_init(&worker->__exclude_stat, __exclude_stat_name);
 #ifdef RED_STATISTICS
     char worker_str[20];
-    sprintf(worker_str, "display[%d]", worker->id);
+    sprintf(worker_str, "display[%d]", worker->qxl->id);
     worker->stat = stat_add_node(INVALID_STAT_REF, worker_str, TRUE);
     worker->wakeup_counter = stat_add_counter(worker->stat, "wakeups", TRUE);
     worker->command_counter = stat_add_counter(worker->stat, "commands", TRUE);
