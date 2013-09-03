@@ -21,6 +21,8 @@ enum {
     PIPE_ITEM_TYPE_INVAL_CURSOR_CACHE,
 };
 
+typedef struct _CursorChannel CursorChannel;
+
 typedef struct CursorItem {
     QXLInstance *qxl;
     uint32_t group_id;
@@ -50,21 +52,6 @@ typedef struct CursorChannelClient {
     uint32_t cursor_cache_items;
 } CursorChannelClient;
 
-typedef struct CursorChannel {
-    CommonChannel common; // Must be the first thing
-
-    CursorItem *item;
-    int cursor_visible;
-    SpicePoint16 cursor_position;
-    uint16_t cursor_trail_length;
-    uint16_t cursor_trail_frequency;
-    uint32_t mouse_mode;
-
-#ifdef RED_STATISTICS
-    StatNodeRef stat;
-#endif
-} CursorChannel;
-
 G_STATIC_ASSERT(sizeof(CursorItem) <= QXL_CURSUR_DEVICE_DATA_SIZE);
 
 CursorChannel*       cursor_channel_new         (RedWorker *worker);
@@ -72,6 +59,7 @@ void                 cursor_channel_disconnect  (CursorChannel *cursor);
 void                 cursor_channel_reset       (CursorChannel *cursor);
 void                 cursor_channel_process_cmd (CursorChannel *cursor, RedCursorCmd *cursor_cmd,
                                                  uint32_t group_id);
+void                 cursor_channel_set_mouse_mode(CursorChannel *cursor, uint32_t mode);
 
 CursorChannelClient* cursor_channel_client_new  (CursorChannel *cursor,
                                                  RedClient *client, RedsStream *stream,
