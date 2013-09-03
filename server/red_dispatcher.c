@@ -1012,35 +1012,10 @@ void red_dispatcher_async_complete(struct RedDispatcher *dispatcher,
     free(async_command);
 }
 
-static RedChannel *red_dispatcher_display_channel_create(RedDispatcher *dispatcher)
-{
-    RedWorkerMessageDisplayChannelCreate payload;
-    RedChannel *display_channel;
-
-    dispatcher_send_message(&dispatcher->dispatcher,
-                            RED_WORKER_MESSAGE_DISPLAY_CHANNEL_CREATE,
-                            &payload);
-    xread(dispatcher->dispatcher.send_fd, &display_channel, sizeof(RedChannel *));
-    return display_channel;
-}
-
-static RedChannel *red_dispatcher_cursor_channel_create(RedDispatcher *dispatcher)
-{
-    RedWorkerMessageCursorChannelCreate payload;
-    RedChannel *cursor_channel;
-
-    dispatcher_send_message(&dispatcher->dispatcher,
-                            RED_WORKER_MESSAGE_CURSOR_CHANNEL_CREATE,
-                            &payload);
-    xread(dispatcher->dispatcher.send_fd, &cursor_channel, sizeof(RedChannel *));
-    return cursor_channel;
-}
-
 RedDispatcher *red_dispatcher_new(QXLInstance *qxl)
 {
     RedDispatcher *red_dispatcher;
-    RedChannel *display_channel;
-    RedChannel *cursor_channel;
+    RedChannel *channel;
     ClientCbs client_cbs = { NULL, };
 
     spice_return_val_if_fail(qxl != NULL, NULL);
@@ -1082,33 +1057,28 @@ RedDispatcher *red_dispatcher_new(QXLInstance *qxl)
 
     // TODO: reference and free
     RedWorker *worker = red_worker_new(qxl, red_dispatcher);
+
+    // TODO: move to their respective channel files
+    channel = red_worker_get_cursor_channel(worker);
+    client_cbs.connect = red_dispatcher_set_cursor_peer;
+    client_cbs.disconnect = red_dispatcher_disconnect_cursor_peer;
+    client_cbs.migrate = red_dispatcher_cursor_migrate;
+    red_channel_register_client_cbs(channel, &client_cbs);
+    red_channel_set_data(channel, red_dispatcher);
+    reds_register_channel(channel);
+
+    channel = red_worker_get_display_channel(worker);
+    client_cbs.connect = red_dispatcher_set_display_peer;
+    client_cbs.disconnect = red_dispatcher_disconnect_display_peer;
+    client_cbs.migrate = red_dispatcher_display_migrate;
+    red_channel_register_client_cbs(channel, &client_cbs);
+    red_channel_set_data(channel, red_dispatcher);
+    red_channel_set_cap(channel, SPICE_DISPLAY_CAP_MONITORS_CONFIG);
+    red_channel_set_cap(channel, SPICE_DISPLAY_CAP_STREAM_REPORT);
+    reds_register_channel(channel);
+
     red_worker_run(worker);
-
     num_active_workers = 1;
-
-    display_channel = red_dispatcher_display_channel_create(red_dispatcher);
-
-    if (display_channel) {
-        client_cbs.connect = red_dispatcher_set_display_peer;
-        client_cbs.disconnect = red_dispatcher_disconnect_display_peer;
-        client_cbs.migrate = red_dispatcher_display_migrate;
-        red_channel_register_client_cbs(display_channel, &client_cbs);
-        red_channel_set_data(display_channel, red_dispatcher);
-        red_channel_set_cap(display_channel, SPICE_DISPLAY_CAP_MONITORS_CONFIG);
-        red_channel_set_cap(display_channel, SPICE_DISPLAY_CAP_STREAM_REPORT);
-        reds_register_channel(display_channel);
-    }
-
-    cursor_channel = red_dispatcher_cursor_channel_create(red_dispatcher);
-
-    if (cursor_channel) {
-        client_cbs.connect = red_dispatcher_set_cursor_peer;
-        client_cbs.disconnect = red_dispatcher_disconnect_cursor_peer;
-        client_cbs.migrate = red_dispatcher_cursor_migrate;
-        red_channel_register_client_cbs(cursor_channel, &client_cbs);
-        red_channel_set_data(cursor_channel, red_dispatcher);
-        reds_register_channel(cursor_channel);
-    }
 
     qxl->st->dispatcher = red_dispatcher;
     red_dispatcher->next = dispatchers;

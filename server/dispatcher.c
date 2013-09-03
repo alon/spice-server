@@ -202,12 +202,13 @@ unlock:
 
 uint32_t dispatcher_read_message(Dispatcher *dispatcher)
 {
-    uint32_t message;
+    uint32_t message = 0;
 
     spice_return_val_if_fail(dispatcher, 0);
     spice_return_val_if_fail(dispatcher->send_fd != -1, 0);
 
-    xread(dispatcher->send_fd, &message, sizeof(message));
+    if (read_safe(dispatcher->send_fd, (uint8_t*)&message, sizeof(message), 1) == -1)
+        spice_warn_if_reached();
 
     return message;
 }
