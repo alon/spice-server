@@ -11332,8 +11332,6 @@ RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher)
     spice_warn_if(init_info.n_surfaces > NUM_SURFACES);
     worker->n_surfaces = init_info.n_surfaces;
 
-    srand(time(NULL));
-
     red_init_quic(worker);
     red_init_lz(worker);
     red_init_jpeg(worker);
