@@ -58,38 +58,10 @@
 #include "common/ring.h"
 #include "common/generated_server_marshallers.h"
 
-#ifdef USE_OPENGL
-#include "common/ogl_ctx.h"
-#include "reds_gl_canvas.h"
-#endif /* USE_OPENGL */
+#include "display_channel.h"
 
 #include "spice.h"
 #include "red_worker.h"
-#include "reds_stream.h"
-#include "reds_sw_canvas.h"
-#include "glz_encoder_dictionary.h"
-#include "glz_encoder.h"
-#include "stat.h"
-#include "reds.h"
-#include "mjpeg_encoder.h"
-#include "red_memslots.h"
-#include "red_parse_qxl.h"
-#include "red_record_qxl.h"
-#include "jpeg_encoder.h"
-#include "demarshallers.h"
-#include "zlib_encoder.h"
-#include "red_channel.h"
-#include "red_dispatcher.h"
-#include "dispatcher.h"
-#include "main_channel.h"
-#include "migration_protocol.h"
-#include "main_dispatcher.h"
-#include "spice_server_utils.h"
-#include "red_time.h"
-#include "spice_bitmap_utils.h"
-#include "spice_image_cache.h"
-#include "pixmap_cache.h"
-#include "display_channel.h"
 #include "cursor_channel.h"
 
 //#define COMPRESS_STAT
@@ -322,8 +294,6 @@ typedef struct StreamActivateReportItem {
 #define WIDE_CLIENT_ACK_WINDOW 40
 #define NARROW_CLIENT_ACK_WINDOW 20
 
-#define CLIENT_PALETTE_CACHE_SIZE 128
-
 typedef struct ImageItem {
     PipeItem link;
     int refs;
@@ -338,8 +308,6 @@ typedef struct ImageItem {
     int can_lossy;
     uint8_t data[0];
 } ImageItem;
-
-typedef struct DisplayChannel DisplayChannel;
 
 enum {
     STREAM_FRAME_NONE,

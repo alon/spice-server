@@ -1,11 +1,44 @@
-#ifndef RED_WORKER_CLIENT_H_
-# define RED_WORKER_CLIENT_H_
+#ifndef DISPLAY_CHANNEL_H_
+# define DISPLAY_CHANNEL_H_
+
+#include <setjmp.h>
 
 #include "red_worker.h"
+#include "reds_stream.h"
 #include "cache_item.h"
 #include "pixmap_cache.h"
+#ifdef USE_OPENGL
+#include "common/ogl_ctx.h"
+#include "reds_gl_canvas.h"
+#endif /* USE_OPENGL */
+#include "reds_sw_canvas.h"
+#include "glz_encoder_dictionary.h"
+#include "glz_encoder.h"
+#include "stat.h"
+#include "reds.h"
+#include "mjpeg_encoder.h"
+#include "red_memslots.h"
+#include "red_parse_qxl.h"
+#include "red_record_qxl.h"
+#include "jpeg_encoder.h"
+#include "demarshallers.h"
+#include "zlib_encoder.h"
+#include "red_channel.h"
+#include "red_dispatcher.h"
+#include "dispatcher.h"
+#include "main_channel.h"
+#include "migration_protocol.h"
+#include "main_dispatcher.h"
+#include "spice_server_utils.h"
+#include "red_time.h"
+#include "spice_bitmap_utils.h"
+#include "spice_image_cache.h"
+#include "pixmap_cache.h"
+
 
 typedef int64_t red_time_t;
+
+typedef struct DisplayChannel DisplayChannel;
 
 typedef struct Drawable Drawable;
 
@@ -13,6 +46,8 @@ typedef struct Drawable Drawable;
 #define PALETTE_CACHE_HASH_SIZE (1 << PALETTE_CACHE_HASH_SHIFT)
 #define PALETTE_CACHE_HASH_MASK (PALETTE_CACHE_HASH_SIZE - 1)
 #define PALETTE_CACHE_HASH_KEY(id) ((id) & PALETTE_CACHE_HASH_MASK)
+
+#define CLIENT_PALETTE_CACHE_SIZE 128
 
 /* Each drawable can refer to at most 3 images: src, brush and mask */
 #define MAX_DRAWABLE_PIXMAP_CACHE_ITEMS 3
@@ -178,4 +213,13 @@ struct _DisplayChannelClient {
     uint64_t streams_max_bit_rate;
 };
 
-#endif /* RED_WORKER_CLIENT_H_ */
+DisplayChannelClient *     display_channel_client_new                (DisplayChannel *display,
+                                                                      RedClient *client,
+                                                                      RedsStream *stream,
+                                                                      int mig_target,
+                                                                      uint32_t *common_caps,
+                                                                      int num_common_caps,
+                                                                      uint32_t *caps,
+                                                                      int num_caps);
+
+#endif /* DISPLAY_CHANNEL_H_ */
