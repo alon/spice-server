@@ -10102,15 +10102,6 @@ static void red_connect_cursor(RedWorker *worker, RedClient *client, RedsStream 
         cursor_channel_init(channel, ccc);
 }
 
-typedef struct __attribute__ ((__packed__)) CursorData {
-    uint32_t visible;
-    SpicePoint16 position;
-    uint16_t trail_length;
-    uint16_t trail_frequency;
-    uint32_t data_size;
-    SpiceCursor _cursor;
-} CursorData;
-
 static void surface_dirty_region_to_rects(RedSurface *surface,
                                           QXLRect *qxl_dirty_rects,
                                           uint32_t num_dirty_rects,
