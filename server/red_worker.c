@@ -74,8 +74,6 @@
 //#define ACYCLIC_SURFACE_DEBUG
 //#define DEBUG_CURSORS
 
-//#define UPDATE_AREA_BY_TREE
-
 #define CMD_RING_POLL_TIMEOUT 10 //milli
 #define CMD_RING_POLL_RETRIES 200
 
@@ -480,9 +478,6 @@ struct Drawable {
     Ring pipes;
     PipeItem *pipe_item_rest;
     uint32_t size_pipe_item_rest;
-#ifdef UPDATE_AREA_BY_TREE
-    RingItem collect_link;
-#endif
     RedDrawable *red_drawable;
 
     Ring glz_ring;
@@ -3639,9 +3634,6 @@ static Drawable *get_drawable(RedWorker *worker, uint8_t effect, RedDrawable *re
 #endif
     ring_item_init(&drawable->list_link);
     ring_item_init(&drawable->surface_list_link);
-#ifdef UPDATE_AREA_BY_TREE
-    ring_item_init(&drawable->collect_link);
-#endif
     ring_item_init(&drawable->tree_item.base.siblings_link);
     drawable->tree_item.base.type = TREE_ITEM_TYPE_DRAWABLE;
     region_init(&drawable->tree_item.base.rgn);
@@ -4084,19 +4076,8 @@ static void red_draw_qxl_drawable(RedWorker *worker, Drawable *drawable)
 
 static void red_draw_drawable(RedWorker *worker, Drawable *drawable)
 {
-#ifdef UPDATE_AREA_BY_TREE
-    SpiceCanvas *canvas;
-
-    canvas = surface->context.canvas;
-    //todo: add need top mask flag
-    canvas->ops->group_start(canvas,
-                             &drawable->tree_item.base.rgn);
-#endif
     red_flush_source_surfaces(worker, drawable);
     red_draw_qxl_drawable(worker, drawable);
-#ifdef UPDATE_AREA_BY_TREE
-    canvas->ops->group_end(canvas);
-#endif
 }
 
 static void validate_area(RedWorker *worker, const SpiceRect *area, uint32_t surface_id)
@@ -4121,93 +4102,6 @@ static void validate_area(RedWorker *worker, const SpiceRect *area, uint32_t sur
     }
 }
 
-#ifdef UPDATE_AREA_BY_TREE
-
-static inline void __red_collect_for_update(RedWorker *worker, Ring *ring, RingItem *ring_item,
-                                            QRegion *rgn, Ring *items)
-{
-    Ring *top_ring = ring;
-
-    for (;;) {
-        TreeItem *now = SPICE_CONTAINEROF(ring_item, TreeItem, siblings_link);
-        Container *container = now->container;
-        if (region_intersects(rgn, &now->rgn)) {
-            if (IS_DRAW_ITEM(now)) {
-                Drawable *drawable = SPICE_CONTAINEROF(now, Drawable, tree_item);
-
-                ring_add(items, &drawable->collect_link);
-                region_or(rgn, &now->rgn);
-                if (drawable->tree_item.shadow) {
-                    region_or(rgn, &drawable->tree_item.shadow->base.rgn);
-                }
-            } else if (now->type == TREE_ITEM_TYPE_SHADOW) {
-                Drawable *owner = SPICE_CONTAINEROF(((Shadow *)now)->owner, Drawable, tree_item);
-                if (!ring_item_is_linked(&owner->collect_link)) {
-                    region_or(rgn, &now->rgn);
-                    region_or(rgn, &owner->tree_item.base.rgn);
-                    ring_add(items, &owner->collect_link);
-                }
-            } else if (now->type == TREE_ITEM_TYPE_CONTAINER) {
-                Container *container = (Container *)now;
-
-                if ((ring_item = ring_get_head(&container->items))) {
-                    ring = &container->items;
-                    spice_assert(((TreeItem *)ring_item)->container);
-                    continue;
-                }
-                ring_item = &now->siblings_link;
-            }
-        }
-
-        while (!(ring_item = ring_next(ring, ring_item))) {
-            if (ring == top_ring) {
-                return;
-            }
-            ring_item = &container->base.siblings_link;
-            container = container->base.container;
-            ring = (container) ? &container->items : top_ring;
-        }
-    }
-}
-
-static void red_update_area(RedWorker *worker, const SpiceRect *area, int surface_id)
-{
-    RedSurface *surface;
-    Ring *ring;
-    RingItem *ring_item;
-    Ring items;
-    QRegion rgn;
-
-    surface = &worker->surfaces[surface_id];
-    ring = &surface->current;
-
-    if (!(ring_item = ring_get_head(ring))) {
-        worker->draw_context.validate_area(surface->context.canvas,
-                                           &worker->dev_info.surface0_area, area);
-        return;
-    }
-
-    region_init(&rgn);
-    region_add(&rgn, area);
-    ring_init(&items);
-    __red_collect_for_update(worker, ring, ring_item, &rgn, &items);
-    region_destroy(&rgn);
-
-    while ((ring_item = ring_get_head(&items))) {
-        Drawable *drawable = SPICE_CONTAINEROF(ring_item, Drawable, collect_link);
-        Container *container;
-
-        ring_remove(ring_item);
-        red_draw_drawable(worker, drawable);
-        container = drawable->tree_item.base.container;
-        current_remove_drawable(worker, drawable);
-        container_cleanup(worker, container);
-    }
-    validate_area(worker, area, surface_id);
-}
-
-#else
-
 /*
     Renders drawables for updating the requested area, but only drawables that are older
     than 'last' (exclusive).
@@ -4215,9 +4109,6 @@ static void red_update_area(RedWorker *worker, const SpiceRect *area, int surfac
 static void red_update_area_till(RedWorker *worker, const SpiceRect *area, int surface_id,
                                  Drawable *last)
 {
-    // TODO: if we use UPDATE_AREA_BY_TREE, a corresponding red_update_area_till
-    // should be implemented
-
     RedSurface *surface;
     Drawable *surface_last = NULL;
     Ring *ring;
@@ -4357,7 +4248,6 @@ static void red_update_area(RedWorker *worker, const SpiceRect *area, int surfac
     validate_area(worker, area, surface_id);
 }
 
-#endif
 #endif
 
 static int red_process_cursor(RedWorker *worker, uint32_t max_pipe_size, int *ring_is_empty)
