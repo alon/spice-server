@@ -63,6 +63,7 @@
 #include "spice.h"
 #include "red_worker.h"
 #include "cursor_channel.h"
+#include "tree_item.h"
 
 //#define COMPRESS_STAT
 //#define DUMP_BITMAP
@@ -408,52 +409,6 @@ struct DisplayChannel {
 #endif
 };
 
-enum {
-    TREE_ITEM_TYPE_DRAWABLE,
-    TREE_ITEM_TYPE_CONTAINER,
-    TREE_ITEM_TYPE_SHADOW,
-};
-
-typedef struct TreeItem {
-    RingItem siblings_link;
-    uint32_t type;
-    struct Container *container;
-    QRegion rgn;
-} TreeItem;
-
-#define IS_DRAW_ITEM(item) ((item)->type == TREE_ITEM_TYPE_DRAWABLE)
-
-typedef struct Shadow {
-    TreeItem base;
-    QRegion on_hold;
-    struct DrawItem* owner;
-} Shadow;
-
-typedef struct Container {
-    TreeItem base;
-    Ring items;
-} Container;
-
-typedef struct DrawItem {
-    TreeItem base;
-    uint8_t effect;
-    uint8_t container_root;
-    Shadow *shadow;
-} DrawItem;
-
-typedef enum {
-    BITMAP_GRADUAL_INVALID,
-    BITMAP_GRADUAL_NOT_AVAIL,
-    BITMAP_GRADUAL_LOW,
-    BITMAP_GRADUAL_MEDIUM,
-    BITMAP_GRADUAL_HIGH,
-} BitmapGradualType;
-
-typedef struct DependItem {
-    Drawable *drawable;
-    RingItem ring_item;
-} DependItem;
-
 typedef struct DrawablePipeItem {
     RingItem base;  /* link for a list of pipe items held by Drawable */
     PipeItem dpi_pipe_item; /* link for the client's pipe itself */
@@ -461,38 +416,6 @@ typedef struct DrawablePipeItem {
     DisplayChannelClient *dcc;
     uint8_t refs;
 } DrawablePipeItem;
-
-struct Drawable {
-    uint8_t refs;
-    RingItem surface_list_link;
-    RingItem list_link;
-    DrawItem tree_item;
-    Ring pipes;
-    PipeItem *pipe_item_rest;
-    uint32_t size_pipe_item_rest;
-    RedDrawable *red_drawable;
-
-    Ring glz_ring;
-
-    red_time_t creation_time;
-    int frames_count;
-    int gradual_frames_count;
-    int last_gradual_frame;
-    Stream *stream;
-    Stream *sized_stream;
-    int streamable;
-    BitmapGradualType copy_bitmap_graduality;
-    uint32_t group_id;
-    DependItem depend_items[3];
-
-    uint8_t *backed_surface_data;
-    DependItem pipe_depend_items[3];
-
-    int surface_id;
-    int surfaces_dest[3];
-
-    uint32_t process_commands_generation;
-};
 
 typedef struct _Drawable _Drawable;
 struct _Drawable {
@@ -854,91 +777,6 @@ static inline int validate_surface(RedWorker *worker, uint32_t surface_id)
         return 0;
     }
     return 1;
-}
-
-static const char *draw_type_to_str(uint8_t type)
-{
-    switch (type) {
-    case QXL_DRAW_FILL:
-        return "QXL_DRAW_FILL";
-    case QXL_DRAW_OPAQUE:
-        return "QXL_DRAW_OPAQUE";
-    case QXL_DRAW_COPY:
-        return "QXL_DRAW_COPY";
-    case QXL_DRAW_TRANSPARENT:
-        return "QXL_DRAW_TRANSPARENT";
-    case QXL_DRAW_ALPHA_BLEND:
-        return "QXL_DRAW_ALPHA_BLEND";
-    case QXL_COPY_BITS:
-        return "QXL_COPY_BITS";
-    case QXL_DRAW_BLEND:
-        return "QXL_DRAW_BLEND";
-    case QXL_DRAW_BLACKNESS:
-        return "QXL_DRAW_BLACKNESS";
-    case QXL_DRAW_WHITENESS:
-        return "QXL_DRAW_WHITENESS";
-    case QXL_DRAW_INVERS:
-        return "QXL_DRAW_INVERS";
-    case QXL_DRAW_ROP3:
-        return "QXL_DRAW_ROP3";
-    case QXL_DRAW_COMPOSITE:
-        return "QXL_DRAW_COMPOSITE";
-    case QXL_DRAW_STROKE:
-        return "QXL_DRAW_STROKE";
-    case QXL_DRAW_TEXT:
-        return "QXL_DRAW_TEXT";
-    default:
-        return "?";
-    }
-}
-
-static void show_red_drawable(RedWorker *worker, RedDrawable *drawable, const char *prefix)
-{
-    if (prefix) {
-        printf("%s: ", prefix);
-    }
-
-    printf("%s effect %d bbox(%d %d %d %d)",
-           draw_type_to_str(drawable->type),
-           drawable->effect,
-           drawable->bbox.top,
-           drawable->bbox.left,
-           drawable->bbox.bottom,
-           drawable->bbox.right);
-
-    switch (drawable->type) {
-    case QXL_DRAW_FILL:
-    case QXL_DRAW_OPAQUE:
-    case QXL_DRAW_COPY:
-    case QXL_DRAW_TRANSPARENT:
-    case QXL_DRAW_ALPHA_BLEND:
-    case QXL_COPY_BITS:
-    case QXL_DRAW_BLEND:
-    case QXL_DRAW_BLACKNESS:
-    case QXL_DRAW_WHITENESS:
-    case QXL_DRAW_INVERS:
-    case QXL_DRAW_ROP3:
-    case QXL_DRAW_COMPOSITE:
-    case QXL_DRAW_STROKE:
-    case QXL_DRAW_TEXT:
-        break;
-    default:
-        spice_error("bad drawable type");
-    }
-    printf("\n");
-}
-
-static void show_draw_item(RedWorker *worker, DrawItem *draw_item, const char *prefix)
-{
-    if (prefix) {
-        printf("%s: ", prefix);
-    }
-    printf("effect %d bbox(%d %d %d %d)\n",
-           draw_item->effect,
-           draw_item->base.rgn.extents.x1,
-           draw_item->base.rgn.extents.y1,
-           draw_item->base.rgn.extents.x2,
-           draw_item->base.rgn.extents.y2);
 }
 
 static inline void red_create_surface_item(DisplayChannelClient *dcc, int surface_id);
@@ -1510,43 +1348,6 @@ static inline void current_remove(RedWorker *worker, TreeItem *item)
             now = SPICE_CONTAINEROF(ring_item, TreeItem, siblings_link);
         } else {
             now = (TreeItem *)container;
-        }
-    }
-}
-
-static void current_tree_for_each(Ring *ring, void (*f)(TreeItem *, void *), void * data)
-{
-    RingItem *ring_item;
-    Ring *top_ring;
-
-    if (!(ring_item = ring_get_head(ring))) {
-        return;
-    }
-    top_ring = ring;
-
-    for (;;) {
-        TreeItem *now = SPICE_CONTAINEROF(ring_item, TreeItem, siblings_link);
-
-        f(now, data);
-
-        if (now->type == TREE_ITEM_TYPE_CONTAINER) {
-            Container *container = (Container *)now;
-
-            if ((ring_item = ring_get_head(&container->items))) {
-                ring = &container->items;
-                continue;
-            }
-        }
-        for (;;) {
-            ring_item = ring_next(ring, &now->siblings_link);
-            if (ring_item) {
-                break;
-            }
-            if (ring == top_ring) {
-                return;
-            }
-            now = (TreeItem *)now->container;
-            ring = (now->container) ? &now->container->items : top_ring;
         }
     }
 }
@@ -8325,70 +8126,21 @@ static inline void red_push(RedWorker *worker)
     }
 }
 
-typedef struct ShowTreeData {
-    RedWorker *worker;
-    int level;
-    Container *container;
-} ShowTreeData;
-
-static void __show_tree_call(TreeItem *item, void *data)
-{
-    ShowTreeData *tree_data = data;
-    const char *item_prefix = "|--";
-    int i;
-
-    while (tree_data->container != item->container) {
-        spice_assert(tree_data->container);
-        tree_data->level--;
-        tree_data->container = tree_data->container->base.container;
-    }
-
-    switch (item->type) {
-    case TREE_ITEM_TYPE_DRAWABLE: {
-        Drawable *drawable = SPICE_CONTAINEROF(item, Drawable, tree_item);
-        const int max_indent = 200;
-        char indent_str[max_indent + 1];
-        int indent_str_len;
-
-        for (i = 0; i < tree_data->level; i++) {
-            printf("  ");
-        }
-        printf(item_prefix, 0);
-        show_red_drawable(tree_data->worker, drawable->red_drawable, NULL);
-        for (i = 0; i < tree_data->level; i++) {
-            printf("  ");
-        }
-        printf("|  ");
-        show_draw_item(tree_data->worker, &drawable->tree_item, NULL);
-        indent_str_len = MIN(max_indent, strlen(item_prefix) + tree_data->level * 2);
-        memset(indent_str, ' ', indent_str_len);
-        indent_str[indent_str_len] = 0;
-        region_dump(&item->rgn, indent_str);
-        printf("\n");
-        break;
-    }
-    case TREE_ITEM_TYPE_CONTAINER:
-        tree_data->level++;
-        tree_data->container = (Container *)item;
-        break;
-    case TREE_ITEM_TYPE_SHADOW:
-        break;
-    }
-}
-
 void red_show_tree(RedWorker *worker)
 {
     int x;
 
-    ShowTreeData show_tree_data;
-    show_tree_data.worker = worker;
-    show_tree_data.level = 0;
-    show_tree_data.container = NULL;
     for (x = 0; x < NUM_SURFACES; ++x) {
-        if (worker->surfaces[x].context.canvas) {
-            current_tree_for_each(&worker->surfaces[x].current, __show_tree_call,
-                                  &show_tree_data);
+        if (!worker->surfaces[x].context.canvas)
+            continue;
+
+        RingItem *it;
+        Ring *ring = &worker->surfaces[x].current;
+        RING_FOREACH(it, ring) {
+            TreeItem *now = SPICE_CONTAINEROF(it, TreeItem, siblings_link);
+            tree_item_dump(now);
         }
+
     }
 }
 
