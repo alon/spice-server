@@ -71,7 +71,6 @@
 /* TODO: DRAW_ALL is broken. */
 //#define DRAW_ALL
 //#define COMPRESS_DEBUG
-//#define ACYCLIC_SURFACE_DEBUG
 //#define DEBUG_CURSORS
 
 #define CMD_RING_POLL_TIMEOUT 10 //milli
@@ -532,9 +531,6 @@ typedef struct RedSurface {
     uint32_t refs;
     Ring current;
     Ring current_list;
-#ifdef ACYCLIC_SURFACE_DEBUG
-    int current_gn;
-#endif
     DrawContext context;
 
     Ring depend_on_me;
@@ -4192,9 +4188,6 @@ static void red_update_area(RedWorker *worker, const SpiceRect *area, int surfac
     QRegion rgn;
     Drawable *last;
     Drawable *now;
-#ifdef ACYCLIC_SURFACE_DEBUG
-    int gn;
-#endif
     spice_debug("surface %d: area ==>", surface_id);
     rect_debug(area);
 
@@ -4206,9 +4199,6 @@ static void red_update_area(RedWorker *worker, const SpiceRect *area, int surfac
     surface = &worker->surfaces[surface_id];
 
     last = NULL;
-#ifdef ACYCLIC_SURFACE_DEBUG
-    gn = ++surface->current_gn;
-#endif
     ring = &surface->current_list;
     ring_item = ring;
 
@@ -4239,11 +4229,6 @@ static void red_update_area(RedWorker *worker, const SpiceRect *area, int surfac
         container_cleanup(worker, container);
         red_draw_drawable(worker, now);
         release_drawable(worker, now);
-#ifdef ACYCLIC_SURFACE_DEBUG
-        if (gn != surface->current_gn) {
-            spice_error("cyclic surface dependencies");
-        }
-#endif
     } while (now != last);
     validate_area(worker, area, surface_id);
 }
