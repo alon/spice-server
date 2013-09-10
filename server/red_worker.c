@@ -68,10 +68,7 @@
 //#define DUMP_BITMAP
 //#define PIPE_DEBUG
 //#define RED_WORKER_STAT
-/* TODO: DRAW_ALL is broken. */
-//#define DRAW_ALL
 //#define COMPRESS_DEBUG
-//#define DEBUG_CURSORS
 
 #define CMD_RING_POLL_TIMEOUT 10 //milli
 #define CMD_RING_POLL_RETRIES 200
@@ -663,15 +660,10 @@ typedef struct BitmapData {
 
 static void red_draw_qxl_drawable(RedWorker *worker, Drawable *drawable);
 static void red_current_flush(RedWorker *worker, int surface_id);
-#ifdef DRAW_ALL
-#define red_update_area(worker, rect, surface_id)
-#define red_draw_drawable(worker, item)
-#else
 static void red_draw_drawable(RedWorker *worker, Drawable *item);
 static void red_update_area(RedWorker *worker, const SpiceRect *area, int surface_id);
 static void red_update_area_till(RedWorker *worker, const SpiceRect *area, int surface_id,
                                  Drawable *last);
-#endif
 static inline void release_drawable(RedWorker *worker, Drawable *item);
 static void red_display_release_stream(RedWorker *worker, StreamAgent *agent);
 static inline void red_detach_stream(RedWorker *worker, Stream *stream, int detach_sized);
@@ -3787,9 +3779,6 @@ static inline void red_process_drawable(RedWorker *worker, RedDrawable *red_draw
             worker->transparent_count++;
         }
         red_pipes_add_drawable(worker, drawable);
-#ifdef DRAW_ALL
-        red_draw_qxl_drawable(worker, drawable);
-#endif
     }
 cleanup:
     release_drawable(worker, drawable);
@@ -4068,8 +4057,6 @@ static void red_draw_qxl_drawable(RedWorker *worker, Drawable *drawable)
     }
 }
 
-#ifndef DRAW_ALL
-
 static void red_draw_drawable(RedWorker *worker, Drawable *drawable)
 {
     red_flush_source_surfaces(worker, drawable);
@@ -4232,8 +4219,6 @@ static void red_update_area(RedWorker *worker, const SpiceRect *area, int surfac
     } while (now != last);
     validate_area(worker, area, surface_id);
 }
-
-#endif
 
 static int red_process_cursor(RedWorker *worker, uint32_t max_pipe_size, int *ring_is_empty)
 {
