@@ -66,7 +66,6 @@
 
 //#define COMPRESS_STAT
 //#define DUMP_BITMAP
-//#define PIPE_DEBUG
 //#define RED_WORKER_STAT
 //#define COMPRESS_DEBUG
 
@@ -420,9 +419,6 @@ typedef struct TreeItem {
     uint32_t type;
     struct Container *container;
     QRegion rgn;
-#ifdef PIPE_DEBUG
-    uint32_t id;
-#endif
 } TreeItem;
 
 #define IS_DRAW_ITEM(item) ((item)->type == TREE_ITEM_TYPE_DRAWABLE)
@@ -622,9 +618,6 @@ typedef struct RedWorker {
     ZlibEncoder *zlib;
 
     uint32_t process_commands_generation;
-#ifdef PIPE_DEBUG
-    uint32_t last_id;
-#endif
 #ifdef RED_WORKER_STAT
     stat_info_t add_stat;
     stat_info_t exclude_stat;
@@ -1663,95 +1656,6 @@ static void red_clear_surface_drawables_from_pipes(RedWorker *worker,
     }
 }
 
-#ifdef PIPE_DEBUG
-
-static void print_rgn(const char* prefix, const QRegion* rgn)
-{
-    int i;
-    printf("TEST: %s: RGN: bbox %u %u %u %u\n",
-           prefix,
-           rgn->bbox.top,
-           rgn->bbox.left,
-           rgn->bbox.bottom,
-           rgn->bbox.right);
-
-    for (i = 0; i < rgn->num_rects; i++) {
-        printf("TEST: %s: RECT %u %u %u %u\n",
-               prefix,
-               rgn->rects[i].top,
-               rgn->rects[i].left,
-               rgn->rects[i].bottom,
-               rgn->rects[i].right);
-    }
-}
-
-static void print_draw_item(const char* prefix, const DrawItem *draw_item)
-{
-    const TreeItem *base = &draw_item->base;
-    const Drawable *drawable = SPICE_CONTAINEROF(draw_item, Drawable, tree_item);
-    printf("TEST: %s: draw id %u container %u effect %u",
-           prefix,
-           base->id, base->container ? base->container->base.id : 0,
-           draw_item->effect);
-    if (draw_item->shadow) {
-        printf(" shadow %u\n", draw_item->shadow->base.id);
-    } else {
-        printf("\n");
-    }
-    print_rgn(prefix, &base->rgn);
-}
-
-static void print_shadow_item(const char* prefix, const Shadow *item)
-{
-    printf("TEST: %s: shadow %p id %d\n", prefix, item, item->base.id);
-    print_rgn(prefix, &item->base.rgn);
-}
-
-static void print_container_item(const char* prefix, const Container *item)
-{
-    printf("TEST: %s: container %p id %d\n", prefix, item, item->base.id);
-    print_rgn(prefix, &item->base.rgn);
-}
-
-static void print_base_item(const char* prefix, const TreeItem *base)
-{
-    switch (base->type) {
-    case TREE_ITEM_TYPE_DRAWABLE:
-        print_draw_item(prefix, (const DrawItem *)base);
-        break;
-    case TREE_ITEM_TYPE_SHADOW:
-        print_shadow_item(prefix, (const Shadow *)base);
-        break;
-    case TREE_ITEM_TYPE_CONTAINER:
-        print_container_item(prefix, (const Container *)base);
-        break;
-    default:
-        spice_error("invalid type %u", base->type);
-    }
-}
-
-void __show_current(TreeItem *item, void *data)
-{
-    print_base_item("TREE", item);
-}
-
-static void show_current(RedWorker *worker, Ring *ring)
-{
-    if (ring_is_empty(ring)) {
-        spice_info("TEST: TREE: EMPTY");
-        return;
-    }
-    current_tree_for_each(ring, __show_current, NULL);
-}
-
-#else
-#define print_rgn(a, b)
-#define print_draw_private(a, b)
-#define show_current(a, r)
-#define print_shadow_item(a, b)
-#define print_base_item(a, b)
-#endif
-
 static inline Shadow *__find_shadow(TreeItem *item)
 {
     while (item->type == TREE_ITEM_TYPE_CONTAINER) {
@@ -1877,14 +1781,11 @@ static void exclude_region(RedWorker *worker, Ring *ring, RingItem *ring_item, Q
         spice_assert(!region_is_empty(&now->rgn));
 
         if (region_intersects(rgn, &now->rgn)) {
-            print_base_item("EXCLUDE2", now);
             __exclude_region(worker, ring, now, rgn, &top_ring, frame_candidate);
-            print_base_item("EXCLUDE3", now);
 
             if (region_is_empty(&now->rgn)) {
                 spice_assert(now->type != TREE_ITEM_TYPE_SHADOW);
                 ring_item = now->siblings_link.prev;
-                print_base_item("EXCLUDE_REMOVE", now);
                 current_remove(worker, now);
                 if (last && *last == now) {
                     *last = (TreeItem *)ring_next(ring, ring_item);
@@ -1922,9 +1823,6 @@ static inline Container *__new_container(RedWorker *worker, DrawItem *item)
 {
     Container *container = spice_new(Container, 1);
     worker->containers_count++;
-#ifdef PIPE_DEBUG
-    container->base.id = ++worker->last_id;
-#endif
     container->base.type = TREE_ITEM_TYPE_CONTAINER;
     container->base.container = item->base.container;
     item->base.container = container;
@@ -3204,7 +3102,6 @@ static inline int red_current_add(RedWorker *worker, Ring *ring, Drawable *drawa
     QRegion exclude_rgn;
     RingItem *exclude_base = NULL;
 
-    print_base_item("ADD", &item->base);
     spice_assert(!region_is_empty(&item->base.rgn));
     region_init(&exclude_rgn);
     now = ring_next(ring, ring);
@@ -3214,13 +3111,11 @@ static inline int red_current_add(RedWorker *worker, Ring *ring, Drawable *drawa
         int test_res;
 
         if (!region_bounds_intersects(&item->base.rgn, &sibling->rgn)) {
-            print_base_item("EMPTY", sibling);
             now = ring_next(ring, now);
             continue;
         }
         test_res = region_test(&item->base.rgn, &sibling->rgn, REGION_TEST_ALL);
         if (!(test_res & REGION_TEST_SHARED)) {
-            print_base_item("EMPTY", sibling);
             now = ring_next(ring, now);
             continue;
         } else if (sibling->type != TREE_ITEM_TYPE_SHADOW) {
@@ -3234,7 +3129,6 @@ static inline int red_current_add(RedWorker *worker, Ring *ring, Drawable *drawa
             if (!(test_res & REGION_TEST_RIGHT_EXCLUSIVE) && item->effect == QXL_EFFECT_OPAQUE) {
                 Shadow *shadow;
                 int skip = now == exclude_base;
-                print_base_item("CONTAIN", sibling);
 
                 if ((shadow = __find_shadow(sibling))) {
                     if (exclude_base) {
@@ -3265,7 +3159,6 @@ static inline int red_current_add(RedWorker *worker, Ring *ring, Drawable *drawa
                     region_clear(&exclude_rgn);
                     exclude_base = NULL;
                 }
-                print_base_item("IN", sibling);
                 if (sibling->type == TREE_ITEM_TYPE_CONTAINER) {
                     container = (Container *)sibling;
                     ring = &container->items;
@@ -3335,9 +3228,6 @@ static inline Shadow *__new_shadow(RedWorker *worker, Drawable *item, SpicePoint
 
     Shadow *shadow = spice_new(Shadow, 1);
     worker->shadows_count++;
-#ifdef PIPE_DEBUG
-    shadow->base.id = ++worker->last_id;
-#endif
     shadow->base.type = TREE_ITEM_TYPE_SHADOW;
     shadow->base.container = NULL;
     shadow->owner = &item->tree_item;
@@ -3361,7 +3251,6 @@ static inline int red_current_add_with_shadow(RedWorker *worker, Ring *ring, Dra
         stat_add(&worker->add_stat, start_time);
         return FALSE;
     }
-    print_base_item("ADDSHADOW", &item->tree_item.base);
     // item and his shadow must initially be placed in the same container.
     // for now putting them on root.
 
@@ -3617,9 +3506,6 @@ static Drawable *get_drawable(RedWorker *worker, uint8_t effect, RedDrawable *re
     drawable->refs = 1;
     clock_gettime(CLOCK_MONOTONIC, &time);
     drawable->creation_time = timespec_to_red_time(&time);
-#ifdef PIPE_DEBUG
-    drawable->tree_item.base.id = ++worker->last_id;
-#endif
     ring_item_init(&drawable->list_link);
     ring_item_init(&drawable->surface_list_link);
     ring_item_init(&drawable->tree_item.base.siblings_link);
@@ -3732,14 +3618,6 @@ static inline void red_process_drawable(RedWorker *worker, RedDrawable *red_draw
     worker->surfaces[surface_id].refs++;
 
     region_add(&drawable->tree_item.base.rgn, &red_drawable->bbox);
-#ifdef PIPE_DEBUG
-    printf("TEST: DRAWABLE: id %u type %s effect %u bbox %u %u %u %u\n",
-           drawable->tree_item.base.id,
-           draw_type_to_str(red_drawable->type),
-           drawable->tree_item.effect,
-           red_drawable->bbox.top, red_drawable->bbox.left,
-           red_drawable->bbox.bottom, red_drawable->bbox.right);
-#endif
 
     if (red_drawable->clip.type == SPICE_CLIP_TYPE_RECTS) {
         QRegion rgn;
