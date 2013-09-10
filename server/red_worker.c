@@ -5226,35 +5226,24 @@ static inline void red_init_zlib(RedWorker *worker)
     }
 }
 
-#ifdef __GNUC__
-#define ATTR_PACKED __attribute__ ((__packed__))
-#else
-#define ATTR_PACKED
-#pragma pack(push)
-#pragma pack(1)
-#endif
-
-
-typedef struct ATTR_PACKED rgb32_pixel_t {
+typedef struct {
     uint8_t b;
     uint8_t g;
     uint8_t r;
     uint8_t pad;
 } rgb32_pixel_t;
 
-typedef struct ATTR_PACKED rgb24_pixel_t {
+G_STATIC_ASSERT(sizeof(rgb32_pixel_t) == 4);
+
+typedef struct {
     uint8_t b;
     uint8_t g;
     uint8_t r;
 } rgb24_pixel_t;
 
+G_STATIC_ASSERT(sizeof(rgb24_pixel_t) == 3);
+
 typedef uint16_t rgb16_pixel_t;
-
-#ifndef __GNUC__
-#pragma pack(pop)
-#endif
-
-#undef ATTR_PACKED
 
 #define RED_BITMAP_UTILS_RGB16
 #include "red_bitmap_utils.h"
