@@ -183,7 +183,8 @@ void                       dcc_release_item                          (DisplayCha
 void                       dcc_send_item                             (DisplayChannelClient *dcc,
                                                                       PipeItem *item);
 int                        dcc_clear_surface_drawables_from_pipe     (DisplayChannelClient *dcc,
-                                                                      int surface_id, int force);
+                                                                      int surface_id,
+                                                                      int wait_if_used);
 int                        dcc_drawable_is_in_pipe                   (DisplayChannelClient *dcc,
                                                                       Drawable *drawable);
 
