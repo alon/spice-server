@@ -2363,7 +2363,7 @@ int red_channel_client_wait_outgoing_item(RedChannelClient *rcc,
         spice_warning("timeout");
         return FALSE;
     } else {
-        spice_assert(red_channel_client_no_item_being_sent(rcc));
+        spice_warn_if_fail(red_channel_client_no_item_being_sent(rcc));
         return TRUE;
     }
 }
@@ -2392,8 +2392,8 @@ int red_channel_client_wait_pipe_item_sent(RedChannelClient *rcc,
     }
     red_channel_client_push(rcc);
 
-    while((item_in_pipe = ring_item_is_linked(&item->link)) &&
-          (timeout == -1 || red_get_monotonic_time() < end_time)) {
+    while ((item_in_pipe = ring_item_is_linked(&item->link)) &&
+           (timeout == -1 || red_get_monotonic_time() < end_time)) {
         usleep(CHANNEL_BLOCKED_SLEEP_DURATION);
         red_channel_client_receive(rcc);
         red_channel_client_send(rcc);
@@ -2451,4 +2451,6 @@ void red_channel_client_disconnect_if_pending_send(RedChannelClient *rcc)
     } else {
         spice_assert(red_channel_client_no_item_being_sent(rcc));
     }
+
+    spice_warn_if_fail(red_channel_client_no_item_being_sent(rcc));
 }
