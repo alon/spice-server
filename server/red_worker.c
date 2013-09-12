@@ -3393,7 +3393,7 @@ static RedDrawable *red_drawable_new(void)
     return red;
 }
 
-static gboolean red_process_drawable(RedWorker *worker, QXLCommandExt *ext_cmd)
+static gboolean red_process_draw(RedWorker *worker, QXLCommandExt *ext_cmd)
 {
     RedDrawable *red_drawable = NULL;
     Drawable *drawable = NULL;
@@ -3851,7 +3851,7 @@ static void red_update_area_till(RedWorker *worker, const SpiceRect *area, int s
            that it is valid to call red_update_area in this case and not red_update_area_till:
            It is impossible that there was newer item then 'last' in one of the surfaces
            that red_update_area is called for, Otherwise, 'now' would have already been rendered.
-           See the call for red_handle_depends_on_target_surface in red_process_drawable */
+           See the call for red_handle_depends_on_target_surface in red_process_draw */
         red_draw_drawable(worker, now);
         release_drawable(worker, now);
     } while (now != surface_last);
@@ -4051,7 +4051,7 @@ static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *
         worker->repoll_cmd_ring = 0;
         switch (ext_cmd.cmd.type) {
         case QXL_CMD_DRAW: {
-            if (!red_process_drawable(worker, &ext_cmd))
+            if (!red_process_draw(worker, &ext_cmd))
                 break;
             break;
         }
