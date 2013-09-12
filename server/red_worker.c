@@ -3261,14 +3261,15 @@ static inline int red_handle_self_bitmap(RedWorker *worker, Drawable *drawable)
     return TRUE;
 }
 
-static void free_one_drawable(RedWorker *worker, int force_glz_free)
+static bool free_one_drawable(RedWorker *worker, int force_glz_free)
 {
     RingItem *ring_item = ring_get_tail(&worker->current_list);
     Drawable *drawable;
     Container *container;
 
     if (!ring_item)
-        return;
+        return FALSE;
+
     drawable = SPICE_CONTAINEROF(ring_item, Drawable, list_link);
     if (force_glz_free) {
         RingItem *glz_item, *next_item;
@@ -3282,43 +3283,33 @@ static void free_one_drawable(RedWorker *worker, int force_glz_free)
 
     current_remove_drawable(worker, drawable);
     container_cleanup(worker, container);
+    return TRUE;
 }
 
-static Drawable *get_drawable(RedWorker *worker, uint8_t effect, RedDrawable *red_drawable,
-                              uint32_t group_id)
+static Drawable *drawable_try_new(RedWorker *worker, int group_id)
 {
     Drawable *drawable;
-    int x;
 
     while (!(drawable = alloc_drawable(worker))) {
-        free_one_drawable(worker, FALSE);
+        if (!free_one_drawable(worker, FALSE))
+            return NULL;
     }
+
+    bzero(drawable, sizeof(Drawable));
+    drawable->refs = 1;
     worker->drawable_count++;
     worker->red_drawable_count++;
-    memset(drawable, 0, sizeof(Drawable));
-    drawable->refs = 1;
     drawable->creation_time = red_get_monotonic_time();
     ring_item_init(&drawable->list_link);
     ring_item_init(&drawable->surface_list_link);
     ring_item_init(&drawable->tree_item.base.siblings_link);
     drawable->tree_item.base.type = TREE_ITEM_TYPE_DRAWABLE;
     region_init(&drawable->tree_item.base.rgn);
-    drawable->tree_item.effect = effect;
-    drawable->red_drawable = ref_red_drawable(red_drawable);
-    drawable->group_id = group_id;
-
-    drawable->surface_id = red_drawable->surface_id;
-    VALIDATE_SURFACE_RETVAL(worker, drawable->surface_id, NULL)
-    for (x = 0; x < 3; ++x) {
-        drawable->surfaces_dest[x] = red_drawable->surfaces_dest[x];
-        if (drawable->surfaces_dest[x] != -1) {
-            VALIDATE_SURFACE_RETVAL(worker, drawable->surfaces_dest[x], NULL)
-        }
-    }
     ring_init(&drawable->pipes);
     ring_init(&drawable->glz_ring);
-
     drawable->process_commands_generation = worker->process_commands_generation;
+    drawable->group_id = group_id;
+
     return drawable;
 }
 
@@ -3394,23 +3385,34 @@ static inline void red_inc_surfaces_drawable_dependencies(RedWorker *worker, Dra
     }
 }
 
-static inline void red_process_drawable(RedWorker *worker, RedDrawable *red_drawable,
-                                        uint32_t group_id)
+static RedDrawable *red_drawable_new(void)
 {
-    int surface_id;
-    Drawable *drawable = get_drawable(worker, red_drawable->effect, red_drawable, group_id);
+    RedDrawable * red = spice_new0(RedDrawable, 1);
 
-    if (!drawable) {
-        rendering_incorrect("failed to get_drawable");
-        return;
-    }
+    red->refs = 1;
+    return red;
+}
 
-    surface_id = drawable->surface_id;
+static gboolean red_process_drawable(RedWorker *worker, QXLCommandExt *ext_cmd)
+{
+    RedDrawable *red_drawable = NULL;
+    Drawable *drawable = NULL;
+    int surface_id, x;
+    gboolean success = FALSE;
 
-    worker->surfaces[surface_id].refs++;
+    drawable = drawable_try_new(worker, ext_cmd->group_id);
+    if (!drawable)
+        goto end;
 
+    red_drawable = red_drawable_new();
+    if (red_get_drawable(&worker->mem_slots, ext_cmd->group_id,
+                         red_drawable, ext_cmd->cmd.data, ext_cmd->flags) != 0)
+        goto end;
+
+    drawable->tree_item.effect = red_drawable->effect;
+    drawable->red_drawable = ref_red_drawable(red_drawable);
+    drawable->surface_id = red_drawable->surface_id;
     region_add(&drawable->tree_item.base.rgn, &red_drawable->bbox);
-
     if (red_drawable->clip.type == SPICE_CLIP_TYPE_RECTS) {
         QRegion rgn;
 
@@ -3419,6 +3421,18 @@ static inline void red_process_drawable(RedWorker *worker, RedDrawable *red_draw
         region_and(&drawable->tree_item.base.rgn, &rgn);
         region_destroy(&rgn);
     }
+
+    if (!validate_surface(worker, drawable->surface_id))
+        goto end;
+    for (x = 0; x < 3; ++x) {
+        drawable->surfaces_dest[x] = red_drawable->surfaces_dest[x];
+        if (!validate_surface(worker, drawable->surfaces_dest[x]))
+            goto end;
+    }
+
+    surface_id = drawable->surface_id;
+    worker->surfaces[surface_id].refs++;
+
     /*
         surface->refs is affected by a drawable (that is
         dependent on the surface) as long as the drawable is alive.
@@ -3428,19 +3442,19 @@ static inline void red_process_drawable(RedWorker *worker, RedDrawable *red_draw
     red_inc_surfaces_drawable_dependencies(worker, drawable);
 
     if (region_is_empty(&drawable->tree_item.base.rgn)) {
-        goto cleanup;
+        goto end;
     }
 
     if (!red_handle_self_bitmap(worker, drawable)) {
-        goto cleanup;
+        goto end;
     }
 
     if (!red_handle_depends_on_target_surface(worker, surface_id)) {
-        goto cleanup;
+        goto end;
     }
 
     if (!red_handle_surfaces_dependencies(worker, drawable)) {
-        goto cleanup;
+        goto end;
     }
 
     if (red_current_add_qxl(worker, &worker->surfaces[surface_id].current, drawable,
@@ -3450,8 +3464,15 @@ static inline void red_process_drawable(RedWorker *worker, RedDrawable *red_draw
         }
         red_pipes_add_drawable(worker, drawable);
     }
-cleanup:
-    release_drawable(worker, drawable);
+
+    success = TRUE;
+
+end:
+    if (drawable != NULL)
+        release_drawable(worker, drawable);
+    if (red_drawable != NULL)
+        put_red_drawable(worker, red_drawable, ext_cmd->group_id);
+    return success;
 }
 
 static inline void red_create_surface(RedWorker *worker, uint32_t surface_id,uint32_t width,
@@ -3940,14 +3961,6 @@ static int red_process_cursor(RedWorker *worker, uint32_t max_pipe_size, int *ri
     return n;
 }
 
-static RedDrawable *red_drawable_new(void)
-{
-    RedDrawable * red = spice_new0(RedDrawable, 1);
-
-    red->refs = 1;
-    return red;
-}
-
 static void red_record_event(RedWorker *worker, int what, uint32_t type)
 {
     struct timespec ts;
@@ -4038,14 +4051,8 @@ static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *
         worker->repoll_cmd_ring = 0;
         switch (ext_cmd.cmd.type) {
         case QXL_CMD_DRAW: {
-            RedDrawable *red_drawable = red_drawable_new(); // returns with 1 ref
-
-            if (!red_get_drawable(&worker->mem_slots, ext_cmd.group_id,
-                                 red_drawable, ext_cmd.cmd.data, ext_cmd.flags)) {
-                red_process_drawable(worker, red_drawable, ext_cmd.group_id);
-            }
-            // release the red_drawable
-            put_red_drawable(worker, red_drawable, ext_cmd.group_id);
+            if (!red_process_drawable(worker, &ext_cmd))
+                break;
             break;
         }
         case QXL_CMD_UPDATE: {
