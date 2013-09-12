@@ -113,6 +113,7 @@ libspice_server_la_SOURCES =			\
 	pixmap_cache.c				\
 	tree_item.h				\
 	tree_item.c				\
+	utils.h					\
 	$(NULL)
 
 if SUPPORT_GL

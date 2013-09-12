@@ -64,6 +64,7 @@
 #include "red_worker.h"
 #include "cursor_channel.h"
 #include "tree_item.h"
+#include "utils.h"
 
 //#define COMPRESS_STAT
 //#define DUMP_BITMAP
@@ -122,11 +123,6 @@
 static void rendering_incorrect(const char *msg)
 {
     spice_warning("rendering incorrect from now on: %s", msg);
-}
-
-static inline red_time_t timespec_to_red_time(struct timespec *time)
-{
-    return time->tv_sec * (1000 * 1000 * 1000) + time->tv_nsec;
 }
 
 #if defined(RED_WORKER_STAT) || defined(COMPRESS_STAT)
@@ -2103,10 +2099,8 @@ static inline unsigned int red_get_streams_timout(RedWorker *worker)
     unsigned int timout = -1;
     Ring *ring = &worker->streams;
     RingItem *item = ring;
-    struct timespec time;
 
-    clock_gettime(CLOCK_MONOTONIC, &time);
-    red_time_t now = timespec_to_red_time(&time);
+    red_time_t now = red_get_monotonic_time();
     while ((item = ring_next(ring, item))) {
         Stream *stream;
 
@@ -2124,11 +2118,9 @@ static inline unsigned int red_get_streams_timout(RedWorker *worker)
 static inline void red_handle_streams_timout(RedWorker *worker)
 {
     Ring *ring = &worker->streams;
-    struct timespec time;
     RingItem *item;
 
-    clock_gettime(CLOCK_MONOTONIC, &time);
-    red_time_t now = timespec_to_red_time(&time);
+    red_time_t now = red_get_monotonic_time();
     item = ring_get_head(ring);
     while (item) {
         Stream *stream = SPICE_CONTAINEROF(item, Stream, link);
@@ -3296,7 +3288,6 @@ static Drawable *get_drawable(RedWorker *worker, uint8_t effect, RedDrawable *re
                               uint32_t group_id)
 {
     Drawable *drawable;
-    struct timespec time;
     int x;
 
     while (!(drawable = alloc_drawable(worker))) {
@@ -3306,8 +3297,7 @@ static Drawable *get_drawable(RedWorker *worker, uint8_t effect, RedDrawable *re
     worker->red_drawable_count++;
     memset(drawable, 0, sizeof(Drawable));
     drawable->refs = 1;
-    clock_gettime(CLOCK_MONOTONIC, &time);
-    drawable->creation_time = timespec_to_red_time(&time);
+    drawable->creation_time = red_get_monotonic_time();
     ring_item_init(&drawable->list_link);
     ring_item_init(&drawable->surface_list_link);
     ring_item_init(&drawable->tree_item.base.siblings_link);
