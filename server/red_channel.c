@@ -42,7 +42,7 @@
 #include "reds.h"
 #include "reds_stream.h"
 #include "main_dispatcher.h"
-#include "red_time.h"
+#include "utils.h"
 
 typedef struct EmptyMsgPipeItem {
     PipeItem base;
@@ -2346,7 +2346,7 @@ int red_channel_client_wait_outgoing_item(RedChannelClient *rcc,
         return TRUE;
     }
     if (timeout != -1) {
-        end_time = red_now() + timeout;
+        end_time = red_get_monotonic_time() + timeout;
     } else {
         end_time = UINT64_MAX;
     }
@@ -2357,7 +2357,7 @@ int red_channel_client_wait_outgoing_item(RedChannelClient *rcc,
         red_channel_client_receive(rcc);
         red_channel_client_send(rcc);
     } while ((blocked = red_channel_client_blocked(rcc)) &&
-             (timeout == -1 || red_now() < end_time));
+             (timeout == -1 || red_get_monotonic_time() < end_time));
 
     if (blocked) {
         spice_warning("timeout");
@@ -2379,7 +2379,7 @@ int red_channel_client_wait_pipe_item_sent(RedChannelClient *rcc,
     spice_info(NULL);
 
     if (timeout != -1) {
-        end_time = red_now() + timeout;
+        end_time = red_get_monotonic_time() + timeout;
     } else {
         end_time = UINT64_MAX;
     }
@@ -2393,7 +2393,7 @@ int red_channel_client_wait_pipe_item_sent(RedChannelClient *rcc,
     red_channel_client_push(rcc);
 
     while((item_in_pipe = ring_item_is_linked(&item->link)) &&
-          (timeout == -1 || red_now() < end_time)) {
+          (timeout == -1 || red_get_monotonic_time() < end_time)) {
         usleep(CHANNEL_BLOCKED_SLEEP_DURATION);
         red_channel_client_receive(rcc);
         red_channel_client_send(rcc);
@@ -2406,7 +2406,7 @@ int red_channel_client_wait_pipe_item_sent(RedChannelClient *rcc,
         return FALSE;
     } else {
         return red_channel_client_wait_outgoing_item(rcc,
-                                                     timeout == -1 ? -1 : end_time - red_now());
+                                                     timeout == -1 ? -1 : end_time - red_get_monotonic_time());
     }
 }
 
@@ -2418,7 +2418,7 @@ int red_channel_wait_all_sent(RedChannel *channel,
     int blocked = FALSE;
 
     if (timeout != -1) {
-        end_time = red_now() + timeout;
+        end_time = red_get_monotonic_time() + timeout;
     } else {
         end_time = UINT64_MAX;
     }
@@ -2426,7 +2426,7 @@ int red_channel_wait_all_sent(RedChannel *channel,
     red_channel_push(channel);
     while (((max_pipe_size = red_channel_max_pipe_size(channel)) ||
            (blocked = red_channel_any_blocked(channel))) &&
-           (timeout == -1 || red_now() < end_time)) {
+           (timeout == -1 || red_get_monotonic_time() < end_time)) {
         spice_debug("pipe-size %u blocked %d", max_pipe_size, blocked);
         usleep(CHANNEL_BLOCKED_SLEEP_DURATION);
         red_channel_receive(channel);
