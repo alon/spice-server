@@ -3275,7 +3275,8 @@ static void free_one_drawable(RedWorker *worker, int force_glz_free)
     Drawable *drawable;
     Container *container;
 
-    spice_assert(ring_item);
+    if (!ring_item)
+        return;
     drawable = SPICE_CONTAINEROF(ring_item, Drawable, list_link);
     if (force_glz_free) {
         RingItem *glz_item, *next_item;
