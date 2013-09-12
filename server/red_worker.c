@@ -9393,6 +9393,9 @@ static void display_channel_release_item(RedChannelClient *rcc, PipeItem *item, 
         spice_debug("not pushed (%d)", item->type);
         display_channel_client_release_item_before_push(dcc, item);
     }
+
+    RedWorker *worker = dcc->common.worker;
+    worker->timeout = 0;
 }
 
 static void display_channel_create(RedWorker *worker, int migrate)
@@ -10605,6 +10608,8 @@ static gboolean worker_source_prepare(GSource *source, gint *timeout)
     RedWorker *worker = wsource->worker;
 
     *timeout = worker->timeout;
+    if (*timeout == 0)
+        return TRUE;
 
     return FALSE; /* do no timeout poll */
 }
