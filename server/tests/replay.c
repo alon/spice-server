@@ -169,6 +169,7 @@ static void end_replay(void)
     spice_replay_free(replay);
 
     if (client_pid) {
+        g_debug("kill %d", client_pid);
         kill(client_pid, SIGINT);
         waitpid(client_pid, &child_status, 0);
     }
