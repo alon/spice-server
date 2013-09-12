@@ -3,6 +3,8 @@
 
 #include <time.h>
 
+typedef int64_t red_time_t;
+
 /* FIXME: consider g_get_monotonic_time (), but in microseconds */
 static inline red_time_t red_get_monotonic_time(void)
 {

@@ -30,13 +30,10 @@
 #include "migration_protocol.h"
 #include "main_dispatcher.h"
 #include "spice_server_utils.h"
-#include "red_time.h"
 #include "spice_bitmap_utils.h"
 #include "spice_image_cache.h"
 #include "pixmap_cache.h"
-
-
-typedef int64_t red_time_t;
+#include "utils.h"
 
 typedef struct DisplayChannel DisplayChannel;
 
