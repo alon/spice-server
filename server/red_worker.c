@@ -313,13 +313,6 @@ typedef struct StreamClipItem {
     SpiceClipRects *rects;
 } StreamClipItem;
 
-static const int BITMAP_FMT_IS_PLT[] = {0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0};
-static const int BITMAP_FMP_BYTES_PER_PIXEL[] = {0, 0, 0, 0, 0, 1, 2, 3, 4, 4, 1};
-
-#define BITMAP_FMT_HAS_GRADUALITY(f)                                    \
-    (bitmap_fmt_is_rgb(f)        &&                                     \
-     ((f) != SPICE_BITMAP_FMT_8BIT_A))
-
 typedef struct {
     QuicUsrContext usr;
     EncoderData data;
@@ -591,10 +584,6 @@ static int red_display_free_some_independent_glz_drawables(DisplayChannelClient 
 static void red_display_free_glz_drawable(DisplayChannelClient *dcc, RedGlzDrawable *drawable);
 static ImageItem *red_add_surface_area_image(DisplayChannelClient *dcc, int surface_id,
                                              SpiceRect *area, PipeItem *pos, int can_lossy);
-static BitmapGradualType _get_bitmap_graduality_level(RedWorker *worker, SpiceBitmap *bitmap,
-                                                      uint32_t group_id);
-static inline int _stride_is_extra(SpiceBitmap *bitmap);
-
 static void display_channel_client_release_item_before_push(DisplayChannelClient *dcc,
                                                             PipeItem *item);
 static void display_channel_client_release_item_after_push(DisplayChannelClient *dcc,
@@ -2619,12 +2608,11 @@ static inline void red_update_copy_graduality(RedWorker* worker, Drawable *drawa
 
     bitmap = &drawable->red_drawable->u.copy.src_bitmap->u.bitmap;
 
-    if (!BITMAP_FMT_HAS_GRADUALITY(bitmap->format) || _stride_is_extra(bitmap) ||
+    if (!bitmap_fmt_has_graduality(bitmap->format) || bitmap_has_extra_stride(bitmap) ||
         (bitmap->data->flags & SPICE_CHUNKS_FLAGS_UNSTABLE)) {
         drawable->copy_bitmap_graduality = BITMAP_GRADUAL_NOT_AVAIL;
     } else  {
-        drawable->copy_bitmap_graduality =
-            _get_bitmap_graduality_level(worker, bitmap,drawable->group_id);
+        drawable->copy_bitmap_graduality = bitmap_get_graduality_level(bitmap);
     }
 }
 
@@ -4888,124 +4876,6 @@ static inline void red_init_zlib(RedWorker *worker)
     }
 }
 
-typedef struct {
-    uint8_t b;
-    uint8_t g;
-    uint8_t r;
-    uint8_t pad;
-} rgb32_pixel_t;
-
-G_STATIC_ASSERT(sizeof(rgb32_pixel_t) == 4);
-
-typedef struct {
-    uint8_t b;
-    uint8_t g;
-    uint8_t r;
-} rgb24_pixel_t;
-
-G_STATIC_ASSERT(sizeof(rgb24_pixel_t) == 3);
-
-typedef uint16_t rgb16_pixel_t;
-
-#define RED_BITMAP_UTILS_RGB16
-#include "red_bitmap_utils_tmpl.c"
-#define RED_BITMAP_UTILS_RGB24
-#include "red_bitmap_utils_tmpl.c"
-#define RED_BITMAP_UTILS_RGB32
-#include "red_bitmap_utils_tmpl.c"
-
-#define GRADUAL_HIGH_RGB24_TH -0.03
-#define GRADUAL_HIGH_RGB16_TH 0
-
-// setting a more permissive threshold for stream identification in order
-// not to miss streams that were artificially scaled on the guest (e.g., full screen view
-// in window media player 12). see red_stream_add_frame
-#define GRADUAL_MEDIUM_SCORE_TH 0.002
-
-// assumes that stride doesn't overflow
-static BitmapGradualType _get_bitmap_graduality_level(RedWorker *worker, SpiceBitmap *bitmap,
-                                                      uint32_t group_id)
-{
-    double score = 0.0;
-    int num_samples = 0;
-    int num_lines;
-    double chunk_score = 0.0;
-    int chunk_num_samples = 0;
-    uint32_t x, i;
-    SpiceChunk *chunk;
-
-    chunk = bitmap->data->chunk;
-    for (i = 0; i < bitmap->data->num_chunks; i++) {
-        num_lines = chunk[i].len / bitmap->stride;
-        x = bitmap->x;
-        switch (bitmap->format) {
-        case SPICE_BITMAP_FMT_16BIT:
-            compute_lines_gradual_score_rgb16((rgb16_pixel_t *)chunk[i].data, x, num_lines,
-                                              &chunk_score, &chunk_num_samples);
-            break;
-        case SPICE_BITMAP_FMT_24BIT:
-            compute_lines_gradual_score_rgb24((rgb24_pixel_t *)chunk[i].data, x, num_lines,
-                                              &chunk_score, &chunk_num_samples);
-            break;
-        case SPICE_BITMAP_FMT_32BIT:
-        case SPICE_BITMAP_FMT_RGBA:
-            compute_lines_gradual_score_rgb32((rgb32_pixel_t *)chunk[i].data, x, num_lines,
-                                              &chunk_score, &chunk_num_samples);
-            break;
-        default:
-            spice_error("invalid bitmap format (not RGB) %u", bitmap->format);
-        }
-        score += chunk_score;
-        num_samples += chunk_num_samples;
-    }
-
-    spice_assert(num_samples);
-    score /= num_samples;
-
-    if (bitmap->format == SPICE_BITMAP_FMT_16BIT) {
-        if (score < GRADUAL_HIGH_RGB16_TH) {
-            return BITMAP_GRADUAL_HIGH;
-        }
-    } else {
-        if (score < GRADUAL_HIGH_RGB24_TH) {
-            return BITMAP_GRADUAL_HIGH;
-        }
-    }
-
-    if (score < GRADUAL_MEDIUM_SCORE_TH) {
-        return BITMAP_GRADUAL_MEDIUM;
-    } else {
-        return BITMAP_GRADUAL_LOW;
-    }
-}
-
-static inline int _stride_is_extra(SpiceBitmap *bitmap)
-{
-    spice_assert(bitmap);
-    if (bitmap_fmt_is_rgb(bitmap->format)) {
-        return ((bitmap->x * BITMAP_FMP_BYTES_PER_PIXEL[bitmap->format]) < bitmap->stride);
-    } else {
-        switch (bitmap->format) {
-        case SPICE_BITMAP_FMT_8BIT:
-            return (bitmap->x < bitmap->stride);
-        case SPICE_BITMAP_FMT_4BIT_BE:
-        case SPICE_BITMAP_FMT_4BIT_LE: {
-            int bytes_width = SPICE_ALIGN(bitmap->x, 2) >> 1;
-            return bytes_width < bitmap->stride;
-        }
-        case SPICE_BITMAP_FMT_1BIT_BE:
-        case SPICE_BITMAP_FMT_1BIT_LE: {
-            int bytes_width = SPICE_ALIGN(bitmap->x, 8) >> 3;
-            return bytes_width < bitmap->stride;
-        }
-        default:
-            spice_error("invalid image type %u", bitmap->format);
-            return 0;
-        }
-    }
-    return 0;
-}
-
 typedef struct compress_send_data_t {
     void*    comp_buf;
     uint32_t comp_buf_size;
@@ -5437,7 +5307,7 @@ static inline int red_compress_image(DisplayChannelClient *dcc,
         ((src->y * src->stride) < MIN_SIZE_TO_COMPRESS)) { // TODO: change the size cond
         return FALSE;
     } else if (image_compression == SPICE_IMAGE_COMPRESS_QUIC) {
-        if (BITMAP_FMT_IS_PLT[src->format]) {
+        if (bitmap_fmt_is_plt(src->format)) {
             return FALSE;
         } else {
             quic_compress = TRUE;
@@ -5447,10 +5317,10 @@ static inline int red_compress_image(DisplayChannelClient *dcc,
             lz doesn't handle (1) bitmaps with strides that are larger than the width
             of the image in bytes (2) unstable bitmaps
         */
-        if (_stride_is_extra(src) || (src->data->flags & SPICE_CHUNKS_FLAGS_UNSTABLE)) {
+        if (bitmap_has_extra_stride(src) || (src->data->flags & SPICE_CHUNKS_FLAGS_UNSTABLE)) {
             if ((image_compression == SPICE_IMAGE_COMPRESS_LZ) ||
                 (image_compression == SPICE_IMAGE_COMPRESS_GLZ) ||
-                BITMAP_FMT_IS_PLT[src->format]) {
+                bitmap_fmt_is_plt(src->format)) {
                 return FALSE;
             } else {
                 quic_compress = TRUE;
@@ -5462,10 +5332,8 @@ static inline int red_compress_image(DisplayChannelClient *dcc,
                     quic_compress = FALSE;
                 } else {
                     if (drawable->copy_bitmap_graduality == BITMAP_GRADUAL_INVALID) {
-                        quic_compress = BITMAP_FMT_HAS_GRADUALITY(src->format) &&
-                            (_get_bitmap_graduality_level(display_channel->common.worker, src,
-                                                          drawable->group_id) ==
-                             BITMAP_GRADUAL_HIGH);
+                        quic_compress = bitmap_fmt_has_graduality(src->format) &&
+                            bitmap_get_graduality_level(src) == BITMAP_GRADUAL_HIGH;
                     } else {
                         quic_compress = (drawable->copy_bitmap_graduality == BITMAP_GRADUAL_HIGH);
                     }
@@ -5485,7 +5353,7 @@ static inline int red_compress_image(DisplayChannelClient *dcc,
             ((image_compression == SPICE_IMAGE_COMPRESS_AUTO_LZ) ||
             (image_compression == SPICE_IMAGE_COMPRESS_AUTO_GLZ))) {
             // if we use lz for alpha, the stride can't be extra
-            if (src->format != SPICE_BITMAP_FMT_RGBA || !_stride_is_extra(src)) {
+            if (src->format != SPICE_BITMAP_FMT_RGBA || !bitmap_has_extra_stride(src)) {
                 return red_jpeg_compress_image(dcc, dest,
                                                src, o_comp_data, drawable->group_id);
             }
@@ -5497,7 +5365,7 @@ static inline int red_compress_image(DisplayChannelClient *dcc,
         int ret;
         if ((image_compression == SPICE_IMAGE_COMPRESS_AUTO_GLZ) ||
             (image_compression == SPICE_IMAGE_COMPRESS_GLZ)) {
-            glz = BITMAP_FMT_HAS_GRADUALITY(src->format) && (
+            glz = bitmap_fmt_has_graduality(src->format) && (
                     (src->x * src->y) < glz_enc_dictionary_get_size(
                         dcc->glz_dict->dict));
         } else if ((image_compression == SPICE_IMAGE_COMPRESS_AUTO_LZ) ||
@@ -7799,14 +7667,12 @@ static void red_marshall_image(RedChannelClient *rcc, SpiceMarshaller *m, ImageI
     comp_mode = display_channel->common.worker->image_compression;
 
     if (((comp_mode == SPICE_IMAGE_COMPRESS_AUTO_LZ) ||
-        (comp_mode == SPICE_IMAGE_COMPRESS_AUTO_GLZ)) && !_stride_is_extra(&bitmap)) {
+        (comp_mode == SPICE_IMAGE_COMPRESS_AUTO_GLZ)) && !bitmap_has_extra_stride(&bitmap)) {
 
-        if (BITMAP_FMT_HAS_GRADUALITY(item->image_format)) {
+        if (bitmap_fmt_has_graduality(item->image_format)) {
             BitmapGradualType grad_level;
 
-            grad_level = _get_bitmap_graduality_level(display_channel->common.worker,
-                                                      &bitmap,
-                                                      worker->mem_slots.internal_groupslot_id);
+            grad_level = bitmap_get_graduality_level(&bitmap);
             if (grad_level == BITMAP_GRADUAL_HIGH) {
                 // if we use lz for alpha, the stride can't be extra
                 lossy_comp = display_channel->enable_jpeg && item->can_lossy;

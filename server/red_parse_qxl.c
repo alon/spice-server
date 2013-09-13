@@ -22,6 +22,7 @@
 #include <stdbool.h>
 #include <inttypes.h>
 #include "common/lz_common.h"
+#include "red_bitmap_utils.h"
 #include "red_common.h"
 #include "red_memslots.h"
 #include "red_parse_qxl.h"
