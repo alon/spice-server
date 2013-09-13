@@ -43,7 +43,6 @@
 #include <poll.h>
 #include <pthread.h>
 #include <netinet/tcp.h>
-#include <setjmp.h>
 #include <openssl/ssl.h>
 #include <inttypes.h>
 #include <glib.h>
@@ -9049,28 +9048,6 @@ CommonChannelClient *common_channel_new_client(CommonChannel *common,
 }
 
 
-DisplayChannelClient *display_channel_client_create(CommonChannel *common,
-                                                    RedClient *client, RedsStream *stream,
-                                                    int mig_target,
-                                                    uint32_t *common_caps, int num_common_caps,
-                                                    uint32_t *caps, int num_caps)
-{
-    DisplayChannelClient *dcc =
-        (DisplayChannelClient*)common_channel_new_client(
-            common, sizeof(DisplayChannelClient), client, stream,
-            mig_target,
-            TRUE,
-            common_caps, num_common_caps,
-            caps, num_caps);
-
-    if (!dcc) {
-        return NULL;
-    }
-    ring_init(&dcc->palette_cache_lru);
-    dcc->palette_cache_available = CLIENT_PALETTE_CACHE_SIZE;
-    return dcc;
-}
-
 RedChannel *red_worker_new_channel(RedWorker *worker, int size,
                                    const char *name,
                                    uint32_t channel_type, int migration_flags,
@@ -9351,13 +9328,8 @@ static void handle_new_display_channel(RedWorker *worker, RedClient *client, Red
     }
     display_channel = worker->display_channel;
     spice_info("add display channel client");
-    dcc = display_channel_client_create(&display_channel->common, client, stream,
-                                        migrate,
-                                        common_caps, num_common_caps,
-                                        caps, num_caps);
-    if (!dcc) {
-        return;
-    }
+    dcc = dcc_new(display_channel, client, stream, migrate,
+                  common_caps, num_common_caps, caps, num_caps);
     spice_info("New display (client %p) dcc %p stream %p", client, dcc, stream);
     stream_buf_size = 32*1024;
     dcc->send_data.stream_outbuf = spice_malloc(stream_buf_size);

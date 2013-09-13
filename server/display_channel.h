@@ -210,7 +210,7 @@ struct _DisplayChannelClient {
     uint64_t streams_max_bit_rate;
 };
 
-DisplayChannelClient *     display_channel_client_new                (DisplayChannel *display,
+DisplayChannelClient*      dcc_new                                   (DisplayChannel *display,
                                                                       RedClient *client,
                                                                       RedsStream *stream,
                                                                       int mig_target,
