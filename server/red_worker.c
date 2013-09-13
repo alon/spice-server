@@ -3007,9 +3007,15 @@ static void add_clip_rects(QRegion *rgn, SpiceClipRects *data)
     }
 }
 
-static inline Shadow *__new_shadow(RedWorker *worker, Drawable *item, SpicePoint *delta)
+static inline Shadow *__new_shadow(RedWorker *worker, Drawable *item)
 {
-    if (!delta->x && !delta->y) {
+    RedDrawable *red_drawable = item->red_drawable;
+    SpicePoint delta = {
+        .x = red_drawable->u.copy_bits.src_pos.x - red_drawable->bbox.left,
+        .y = red_drawable->u.copy_bits.src_pos.y - red_drawable->bbox.top
+    };
+
+    if (!delta.x && !delta.y) {
         return NULL;
     }
 
@@ -3019,22 +3025,21 @@ static inline Shadow *__new_shadow(RedWorker *worker, Drawable *item, SpicePoint
     shadow->base.container = NULL;
     shadow->owner = &item->tree_item;
     region_clone(&shadow->base.rgn, &item->tree_item.base.rgn);
-    region_offset(&shadow->base.rgn, delta->x, delta->y);
+    region_offset(&shadow->base.rgn, delta.x, delta.y);
     ring_item_init(&shadow->base.siblings_link);
     region_init(&shadow->on_hold);
     item->tree_item.shadow = shadow;
     return shadow;
 }
 
-static inline int red_current_add_with_shadow(RedWorker *worker, Ring *ring, Drawable *item,
-                                              SpicePoint *delta)
+static inline int red_current_add_with_shadow(RedWorker *worker, Ring *ring, Drawable *item)
 {
 #ifdef RED_WORKER_STAT
     stat_time_t start_time = stat_now(worker);
     ++worker->add_with_shadow_count;
 #endif
 
-    Shadow *shadow = __new_shadow(worker, item, delta);
+    Shadow *shadow = __new_shadow(worker, item);
     if (!shadow) {
         stat_add(&worker->add_stat, start_time);
         return FALSE;
@@ -3142,11 +3147,7 @@ static int red_add_drawable(RedWorker *worker, Drawable *drawable)
     Ring *ring = &worker->surfaces[surface_id].current;
 
     if (has_shadow(red_drawable)) {
-        SpicePoint delta = {
-            .x = red_drawable->u.copy_bits.src_pos.x - red_drawable->bbox.left,
-            .y = red_drawable->u.copy_bits.src_pos.y - red_drawable->bbox.top
-        };
-        ret = red_current_add_with_shadow(worker, ring, drawable, &delta);
+        ret = red_current_add_with_shadow(worker, ring, drawable);
     } else {
         red_update_streamable(worker, drawable, red_drawable);
         ret = red_current_add(worker, ring, drawable);
