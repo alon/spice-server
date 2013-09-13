@@ -10516,6 +10516,7 @@ RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher)
     red_init_jpeg(worker);
     red_init_zlib(worker);
     worker->timeout = -1;
+    worker->set_client_capabilities_pending = TRUE;
 
     worker->cursor_channel = cursor_channel_new(worker);
     // TODO: handle seemless migration. Temp, setting migrate to FALSE
