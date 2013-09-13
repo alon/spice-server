@@ -52,17 +52,4 @@ static const LzImageType MAP_BITMAP_FMT_TO_LZ_IMAGE_TYPE[] = {
     LZ_IMAGE_TYPE_A8
 };
 
-static inline int bitmap_fmt_is_rgb(uint8_t fmt)
-{
-    static const int BITMAP_FMT_IS_RGB[SPICE_BITMAP_FMT_ENUM_END] =
-                                        {0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1};
-
-    if (fmt >= SPICE_BITMAP_FMT_ENUM_END) {
-        spice_warning("fmt >= SPICE_BITMAP_FMT_ENUM_END; %d >= %d",
-                      fmt, SPICE_BITMAP_FMT_ENUM_END);
-        return 0;
-    }
-    return BITMAP_FMT_IS_RGB[fmt];
-}
-
 #endif

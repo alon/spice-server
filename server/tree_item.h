@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "common/region.h"
 #include "common/ring.h"
+#include "red_bitmap_utils.h"
 
 enum {
     TREE_ITEM_TYPE_NONE,
@@ -46,14 +47,6 @@ struct _DrawItem {
 };
 
 #define IS_DRAW_ITEM(item) ((item)->type == TREE_ITEM_TYPE_DRAWABLE)
-
-typedef enum {
-    BITMAP_GRADUAL_INVALID,
-    BITMAP_GRADUAL_NOT_AVAIL,
-    BITMAP_GRADUAL_LOW,
-    BITMAP_GRADUAL_MEDIUM,
-    BITMAP_GRADUAL_HIGH,
-} BitmapGradualType;
 
 typedef struct DependItem {
     Drawable *drawable;

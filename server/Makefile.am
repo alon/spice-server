@@ -112,6 +112,8 @@ libspice_server_la_SOURCES =			\
 	pixmap_cache.c				\
 	tree_item.h				\
 	tree_item.c				\
+	red_bitmap_utils.h				\
+	red_bitmap_utils.c				\
 	utils.h					\
 	$(NULL)
 
