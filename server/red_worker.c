@@ -584,85 +584,6 @@ void drawable_pipe_item_unref(DrawablePipeItem *dpi)
     free(dpi);
 }
 
-
-#ifdef COMPRESS_STAT
-static void print_compress_stats(DisplayChannel *display_channel)
-{
-    uint64_t glz_enc_size;
-
-    if (!display_channel) {
-        return;
-    }
-
-    glz_enc_size = display_channel->enable_zlib_glz_wrap ?
-                       display_channel->zlib_glz_stat.comp_size :
-                       display_channel->glz_stat.comp_size;
-
-    spice_info("==> Compression stats for display %u", display_channel->common.id);
-    spice_info("Method   \t  count  \torig_size(MB)\tenc_size(MB)\tenc_time(s)");
-    spice_info("QUIC     \t%8d\t%13.2f\t%12.2f\t%12.2f",
-               display_channel->quic_stat.count,
-               stat_byte_to_mega(display_channel->quic_stat.orig_size),
-               stat_byte_to_mega(display_channel->quic_stat.comp_size),
-               stat_cpu_time_to_sec(display_channel->quic_stat.total)
-               );
-    spice_info("GLZ      \t%8d\t%13.2f\t%12.2f\t%12.2f",
-               display_channel->glz_stat.count,
-               stat_byte_to_mega(display_channel->glz_stat.orig_size),
-               stat_byte_to_mega(display_channel->glz_stat.comp_size),
-               stat_cpu_time_to_sec(display_channel->glz_stat.total)
-               );
-    spice_info("ZLIB GLZ \t%8d\t%13.2f\t%12.2f\t%12.2f",
-               display_channel->zlib_glz_stat.count,
-               stat_byte_to_mega(display_channel->zlib_glz_stat.orig_size),
-               stat_byte_to_mega(display_channel->zlib_glz_stat.comp_size),
-               stat_cpu_time_to_sec(display_channel->zlib_glz_stat.total)
-               );
-    spice_info("LZ       \t%8d\t%13.2f\t%12.2f\t%12.2f",
-               display_channel->lz_stat.count,
-               stat_byte_to_mega(display_channel->lz_stat.orig_size),
-               stat_byte_to_mega(display_channel->lz_stat.comp_size),
-               stat_cpu_time_to_sec(display_channel->lz_stat.total)
-               );
-    spice_info("JPEG     \t%8d\t%13.2f\t%12.2f\t%12.2f",
-               display_channel->jpeg_stat.count,
-               stat_byte_to_mega(display_channel->jpeg_stat.orig_size),
-               stat_byte_to_mega(display_channel->jpeg_stat.comp_size),
-               stat_cpu_time_to_sec(display_channel->jpeg_stat.total)
-               );
-    spice_info("JPEG-RGBA\t%8d\t%13.2f\t%12.2f\t%12.2f",
-               display_channel->jpeg_alpha_stat.count,
-               stat_byte_to_mega(display_channel->jpeg_alpha_stat.orig_size),
-               stat_byte_to_mega(display_channel->jpeg_alpha_stat.comp_size),
-               stat_cpu_time_to_sec(display_channel->jpeg_alpha_stat.total)
-               );
-    spice_info("-------------------------------------------------------------------");
-    spice_info("Total    \t%8d\t%13.2f\t%12.2f\t%12.2f",
-               display_channel->lz_stat.count + display_channel->glz_stat.count +
-                                                display_channel->quic_stat.count +
-                                                display_channel->jpeg_stat.count +
-                                                display_channel->jpeg_alpha_stat.count,
-               stat_byte_to_mega(display_channel->lz_stat.orig_size +
-                                 display_channel->glz_stat.orig_size +
-                                 display_channel->quic_stat.orig_size +
-                                 display_channel->jpeg_stat.orig_size +
-                                 display_channel->jpeg_alpha_stat.orig_size),
-               stat_byte_to_mega(display_channel->lz_stat.comp_size +
-                                 glz_enc_size +
-                                 display_channel->quic_stat.comp_size +
-                                 display_channel->jpeg_stat.comp_size +
-                                 display_channel->jpeg_alpha_stat.comp_size),
-               stat_cpu_time_to_sec(display_channel->lz_stat.total +
-                                    display_channel->glz_stat.total +
-                                    display_channel->zlib_glz_stat.total +
-                                    display_channel->quic_stat.total +
-                                    display_channel->jpeg_stat.total +
-                                    display_channel->jpeg_alpha_stat.total)
-               );
-}
-
-#endif
-
 QXLInstance* red_worker_get_qxl(RedWorker *worker)
 {
     spice_return_val_if_fail(worker != NULL, NULL);
@@ -7894,9 +7815,7 @@ static void display_channel_client_on_disconnect(RedChannelClient *rcc)
     worker = common->worker;
     display_channel = (DisplayChannel *)rcc->channel;
     spice_assert(display_channel == worker->display_channel);
-#ifdef COMPRESS_STAT
-    print_compress_stats(display_channel);
-#endif
+    display_channel_compress_stats_print(display_channel);
     pixmap_cache_unref(dcc->pixmap_cache);
     dcc->pixmap_cache = NULL;
     red_release_glz(dcc);
@@ -9929,17 +9848,9 @@ void handle_dev_set_compression(void *opaque, uint32_t message_type, void *paylo
     default:
         spice_warning("ic invalid");
     }
-#ifdef COMPRESS_STAT
-    print_compress_stats(worker->display_channel);
-    if (worker->display_channel) {
-        stat_reset(&worker->display_channel->quic_stat);
-        stat_reset(&worker->display_channel->lz_stat);
-        stat_reset(&worker->display_channel->glz_stat);
-        stat_reset(&worker->display_channel->jpeg_stat);
-        stat_reset(&worker->display_channel->zlib_glz_stat);
-        stat_reset(&worker->display_channel->jpeg_alpha_stat);
-    }
-#endif
+
+    display_channel_compress_stats_print(worker->display_channel);
+    display_channel_compress_stats_reset(worker->display_channel);
 }
 
 void handle_dev_set_streaming_video(void *opaque, uint32_t message_type, void *payload)
