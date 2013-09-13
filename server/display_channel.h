@@ -313,6 +313,7 @@ MonitorsConfig*            monitors_config_new                       (QXLHead *h
 MonitorsConfig *           monitors_config_ref                       (MonitorsConfig *config);
 void                       monitors_config_unref                     (MonitorsConfig *config);
 
+/* TODO: move to .c */
 struct DisplayChannel {
     CommonChannel common; // Must be the first thing
 
@@ -343,5 +344,8 @@ struct DisplayChannel {
     stat_info_t jpeg_alpha_stat;
 #endif
 };
+
+void                       display_channel_compress_stats_print      (const DisplayChannel *display);
+void                       display_channel_compress_stats_reset      (DisplayChannel *display);
 
 #endif /* DISPLAY_CHANNEL_H_ */
