@@ -65,3 +65,43 @@ MonitorsConfig* monitors_config_new(QXLHead *heads, ssize_t nheads, ssize_t max)
 
     return mc;
 }
+
+static MonitorsConfigItem *monitors_config_item_new(RedChannel* channel,
+                                                    MonitorsConfig *monitors_config)
+{
+    MonitorsConfigItem *mci;
+
+    mci = (MonitorsConfigItem *)spice_malloc(sizeof(*mci));
+    mci->monitors_config = monitors_config;
+
+    red_channel_pipe_item_init(channel,
+                               &mci->pipe_item, PIPE_ITEM_TYPE_MONITORS_CONFIG);
+    return mci;
+}
+
+static inline void red_monitors_config_item_add(DisplayChannelClient *dcc)
+{
+    DisplayChannel *dc = DCC_TO_DC(dcc);
+    MonitorsConfigItem *mci;
+
+    mci = monitors_config_item_new(dcc->common.base.channel,
+                                   monitors_config_ref(dc->monitors_config));
+    red_channel_client_pipe_add(&dcc->common.base, &mci->pipe_item);
+}
+
+void dcc_push_monitors_config(DisplayChannelClient *dcc)
+{
+    MonitorsConfig *monitors_config = DCC_TO_DC(dcc)->monitors_config;
+
+    if (monitors_config == NULL) {
+        spice_warning("monitors_config is NULL");
+        return;
+    }
+
+    if (!red_channel_client_test_remote_cap(&dcc->common.base,
+                                            SPICE_DISPLAY_CAP_MONITORS_CONFIG)) {
+        return;
+    }
+    red_monitors_config_item_add(dcc);
+    red_channel_client_push(&dcc->common.base);
+}

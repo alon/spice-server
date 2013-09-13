@@ -281,6 +281,7 @@ DisplayChannelClient*      dcc_new                                   (DisplayCha
                                                                       int num_common_caps,
                                                                       uint32_t *caps,
                                                                       int num_caps);
+void                       dcc_push_monitors_config                  (DisplayChannelClient *dcc);
 
 typedef struct DrawablePipeItem {
     RingItem base;  /* link for a list of pipe items held by Drawable */
