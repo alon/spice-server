@@ -20,3 +20,48 @@ DisplayChannelClient *dcc_new(DisplayChannel *display,
 
     return dcc;
 }
+
+MonitorsConfig* monitors_config_ref(MonitorsConfig *monitors_config)
+{
+    monitors_config->refs++;
+
+    return monitors_config;
+}
+
+void monitors_config_unref(MonitorsConfig *monitors_config)
+{
+    if (!monitors_config) {
+        return;
+    }
+    if (--monitors_config->refs > 0) {
+        return;
+    }
+
+    spice_debug("freeing monitors config");
+    free(monitors_config);
+}
+
+static void monitors_config_debug(MonitorsConfig *mc)
+{
+    int i;
+
+    spice_debug("monitors config count:%d max:%d", mc->count, mc->max_allowed);
+    for (i = 0; i < mc->count; i++)
+        spice_debug("+%d+%d %dx%d",
+                    mc->heads[i].x, mc->heads[i].y,
+                    mc->heads[i].width, mc->heads[i].height);
+}
+
+MonitorsConfig* monitors_config_new(QXLHead *heads, ssize_t nheads, ssize_t max)
+{
+    MonitorsConfig *mc;
+
+    mc = spice_malloc(sizeof(MonitorsConfig) + nheads * sizeof(QXLHead));
+    mc->refs = 1;
+    mc->count = nheads;
+    mc->max_allowed = max;
+    memcpy(mc->heads, heads, nheads * sizeof(QXLHead));
+    monitors_config_debug(mc);
+
+    return mc;
+}

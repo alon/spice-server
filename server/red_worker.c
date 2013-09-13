@@ -243,19 +243,6 @@ typedef struct SurfaceDestroyItem {
     PipeItem pipe_item;
 } SurfaceDestroyItem;
 
-typedef struct MonitorsConfig {
-    int refs;
-    struct RedWorker *worker;
-    int count;
-    int max_allowed;
-    QXLHead heads[0];
-} MonitorsConfig;
-
-typedef struct MonitorsConfigItem {
-    PipeItem pipe_item;
-    MonitorsConfig *monitors_config;
-} MonitorsConfigItem;
-
 typedef struct StreamActivateReportItem {
     PipeItem pipe_item;
     uint32_t stream_id;
@@ -353,6 +340,8 @@ Ring glz_dictionary_list = {&glz_dictionary_list, &glz_dictionary_list};
 
 struct DisplayChannel {
     CommonChannel common; // Must be the first thing
+
+    MonitorsConfig *monitors_config;
 
     uint32_t num_renderers;
     uint32_t renderers[RED_RENDERER_LAST];
@@ -454,8 +443,6 @@ typedef struct RedWorker {
     RedSurface surfaces[NUM_SURFACES];
     uint32_t n_surfaces;
     SpiceImageSurfaces image_surfaces;
-
-    MonitorsConfig *monitors_config;
 
     Ring current_list;
     uint32_t current_size;
@@ -563,7 +550,7 @@ static void display_channel_client_release_item_before_push(DisplayChannelClient
                                                             PipeItem *item);
 static void display_channel_client_release_item_after_push(DisplayChannelClient *dcc,
                                                            PipeItem *item);
-static void red_push_monitors_config(DisplayChannelClient *dcc);
+static void dcc_push_monitors_config(DisplayChannelClient *dcc);
 
 /*
  * Macros to make iterating over stuff easier
@@ -721,26 +708,6 @@ QXLInstance* red_worker_get_qxl(RedWorker *worker)
     spice_return_val_if_fail(worker != NULL, NULL);
 
     return worker->qxl;
-}
-
-static MonitorsConfig *monitors_config_getref(MonitorsConfig *monitors_config)
-{
-    monitors_config->refs++;
-
-    return monitors_config;
-}
-
-static void monitors_config_decref(MonitorsConfig *monitors_config)
-{
-    if (!monitors_config) {
-        return;
-    }
-    if (--monitors_config->refs > 0) {
-        return;
-    }
-
-    spice_debug("freeing monitors config");
-    free(monitors_config);
 }
 
 static inline int is_primary_surface(RedWorker *worker, uint32_t surface_id)
@@ -8398,7 +8365,7 @@ static void on_new_display_channel_client(DisplayChannelClient *dcc)
         red_current_flush(worker, 0);
         push_new_primary_surface(dcc);
         red_push_surface_image(dcc, 0);
-        red_push_monitors_config(dcc);
+        dcc_push_monitors_config(dcc);
         red_pipe_add_verb(rcc, SPICE_MSG_DISPLAY_MARK);
         red_disply_start_streams(dcc);
     }
@@ -9096,7 +9063,7 @@ static void display_channel_client_release_item_after_push(DisplayChannelClient 
     case PIPE_ITEM_TYPE_MONITORS_CONFIG: {
         MonitorsConfigItem *monconf_item = SPICE_CONTAINEROF(item,
                                                              MonitorsConfigItem, pipe_item);
-        monitors_config_decref(monconf_item->monitors_config);
+        monitors_config_unref(monconf_item->monitors_config);
         free(item);
         break;
     }
@@ -9153,7 +9120,7 @@ static void display_channel_client_release_item_before_push(DisplayChannelClient
     case PIPE_ITEM_TYPE_MONITORS_CONFIG: {
         MonitorsConfigItem *monconf_item = SPICE_CONTAINEROF(item,
                                                              MonitorsConfigItem, pipe_item);
-        monitors_config_decref(monconf_item->monitors_config);
+        monitors_config_unref(monconf_item->monitors_config);
         free(item);
         break;
     }
@@ -9556,7 +9523,7 @@ void handle_dev_destroy_surfaces(void *opaque, uint32_t message_type, void *payl
     dev_destroy_surfaces(worker);
 }
 
-static MonitorsConfigItem *get_monitors_config_item(
+static MonitorsConfigItem *monitors_config_item_new(
     RedChannel* channel, MonitorsConfig *monitors_config)
 {
     MonitorsConfigItem *mci;
@@ -9571,46 +9538,28 @@ static MonitorsConfigItem *get_monitors_config_item(
 
 static inline void red_monitors_config_item_add(DisplayChannelClient *dcc)
 {
+    DisplayChannel *dc = DCC_TO_DC(dcc);
     MonitorsConfigItem *mci;
-    RedWorker *worker = dcc->common.worker;
 
-    mci = get_monitors_config_item(dcc->common.base.channel,
-                                   monitors_config_getref(worker->monitors_config));
+    mci = monitors_config_item_new(dcc->common.base.channel,
+                                   monitors_config_ref(dc->monitors_config));
     red_channel_client_pipe_add(&dcc->common.base, &mci->pipe_item);
 }
 
-static void worker_update_monitors_config(RedWorker *worker,
-                                          QXLMonitorsConfig *dev_monitors_config)
+static void display_update_monitors_config(DisplayChannel *display,
+                                           QXLMonitorsConfig *config)
 {
-    int heads_size;
-    MonitorsConfig *monitors_config;
-    int i;
+    if (display->monitors_config)
+        monitors_config_unref(display->monitors_config);
 
-    monitors_config_decref(worker->monitors_config);
+    display->monitors_config =
+        monitors_config_new(config->heads, config->count, config->max_allowed);
 
-    spice_debug("monitors config %d(%d)",
-                dev_monitors_config->count,
-                dev_monitors_config->max_allowed);
-    for (i = 0; i < dev_monitors_config->count; i++) {
-        spice_debug("+%d+%d %dx%d",
-                    dev_monitors_config->heads[i].x,
-                    dev_monitors_config->heads[i].y,
-                    dev_monitors_config->heads[i].width,
-                    dev_monitors_config->heads[i].height);
-    }
-    heads_size = dev_monitors_config->count * sizeof(QXLHead);
-    worker->monitors_config = monitors_config =
-        spice_malloc(sizeof(*monitors_config) + heads_size);
-    monitors_config->refs = 1;
-    monitors_config->worker = worker;
-    monitors_config->count = dev_monitors_config->count;
-    monitors_config->max_allowed = dev_monitors_config->max_allowed;
-    memcpy(monitors_config->heads, dev_monitors_config->heads, heads_size);
 }
 
-static void red_push_monitors_config(DisplayChannelClient *dcc)
+static void dcc_push_monitors_config(DisplayChannelClient *dcc)
 {
-    MonitorsConfig *monitors_config = DCC_TO_WORKER(dcc)->monitors_config;
+    MonitorsConfig *monitors_config = DCC_TO_DC(dcc)->monitors_config;
 
     if (monitors_config == NULL) {
         spice_warning("monitors_config is NULL");
@@ -9631,34 +9580,24 @@ static void red_worker_push_monitors_config(RedWorker *worker)
     RingItem *item, *next;
 
     WORKER_FOREACH_DCC_SAFE(worker, item, next, dcc) {
-        red_push_monitors_config(dcc);
+        dcc_push_monitors_config(dcc);
     }
 }
 
 static void set_monitors_config_to_primary(RedWorker *worker)
 {
-    QXLHead *head;
-    DrawContext *context;
+    DrawContext *context = &worker->surfaces[0].context;
+    DisplayChannel *display = worker->display_channel;
+    QXLHead head = { 0, };
 
-    if (!worker->surfaces[0].context.canvas) {
-        spice_warning("no primary surface");
-        return;
-    }
-    monitors_config_decref(worker->monitors_config);
-    context = &worker->surfaces[0].context;
-    worker->monitors_config =
-        spice_malloc(sizeof(*worker->monitors_config) + sizeof(QXLHead));
-    worker->monitors_config->refs = 1;
-    worker->monitors_config->worker = worker;
-    worker->monitors_config->count = 1;
-    worker->monitors_config->max_allowed = 1;
-    head = worker->monitors_config->heads;
-    head->id = 0;
-    head->surface_id = 0;
-    head->width = context->width;
-    head->height = context->height;
-    head->x = 0;
-    head->y = 0;
+    spice_return_if_fail(worker->surfaces[0].context.canvas);
+
+    if (display->monitors_config)
+        monitors_config_unref(display->monitors_config);
+
+    head.width = context->width;
+    head.height = context->height;
+    display->monitors_config = monitors_config_new(&head, 1, 1);
 }
 
 static void dev_create_primary_surface(RedWorker *worker, uint32_t surface_id,
@@ -10003,7 +9942,7 @@ static void handle_dev_monitors_config_async(void *opaque,
                       dev_monitors_config->max_allowed);
         return;
     }
-    worker_update_monitors_config(worker, dev_monitors_config);
+    display_update_monitors_config(worker->display_channel, dev_monitors_config);
     red_worker_push_monitors_config(worker);
 }
 
