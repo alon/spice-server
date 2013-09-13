@@ -65,7 +65,6 @@ libspice_server_la_SOURCES =			\
 	main_channel.h				\
 	mjpeg_encoder.c				\
 	mjpeg_encoder.h				\
-	red_bitmap_utils.h			\
 	red_channel.c				\
 	red_channel.h				\
 	red_common.h				\
@@ -137,6 +136,7 @@ libspice_serverinclude_HEADERS =		\
 	$(NULL)
 
 EXTRA_DIST =					\
+	red_bitmap_utils_tmpl.c			\
 	cache_item.tmpl.c			\
 	glz_encode_match_tmpl.c			\
 	glz_encode_tmpl.c			\
