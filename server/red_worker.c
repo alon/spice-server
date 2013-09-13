@@ -558,7 +558,8 @@ DrawablePipeItem *drawable_pipe_item_new(DisplayChannelClient *dcc,
     dpi->dcc = dcc;
     ring_item_init(&dpi->base);
     ring_add(&drawable->pipes, &dpi->base);
-    red_channel_pipe_item_init(dcc->common.base.channel, &dpi->dpi_pipe_item, PIPE_ITEM_TYPE_DRAW);
+    red_channel_pipe_item_init(RED_CHANNEL_CLIENT(dcc)->channel,
+                               &dpi->dpi_pipe_item, PIPE_ITEM_TYPE_DRAW);
     dpi->refs++;
     drawable->refs++;
     return dpi;
@@ -669,7 +670,7 @@ static void dcc_add_drawable(DisplayChannelClient *dcc, Drawable *drawable)
 
     red_handle_drawable_surfaces_client_synced(dcc, drawable);
     dpi = drawable_pipe_item_new(dcc, drawable);
-    red_channel_client_pipe_add(&dcc->common.base, &dpi->dpi_pipe_item);
+    red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &dpi->dpi_pipe_item);
 }
 
 static void red_pipes_add_drawable(RedWorker *worker, Drawable *drawable)
@@ -692,7 +693,7 @@ static void dcc_add_drawable_to_tail(DisplayChannelClient *dcc, Drawable *drawab
     }
     red_handle_drawable_surfaces_client_synced(dcc, drawable);
     dpi = drawable_pipe_item_new(dcc, drawable);
-    red_channel_client_pipe_add_tail(&dcc->common.base, &dpi->dpi_pipe_item);
+    red_channel_client_pipe_add_tail(RED_CHANNEL_CLIENT(dcc), &dpi->dpi_pipe_item);
 }
 
 static inline void red_pipes_add_drawable_after(RedWorker *worker,
@@ -708,7 +709,7 @@ static inline void red_pipes_add_drawable_after(RedWorker *worker,
         dcc = dpi_pos_after->dcc;
         red_handle_drawable_surfaces_client_synced(dcc, drawable);
         dpi = drawable_pipe_item_new(dcc, drawable);
-        red_channel_client_pipe_add_after(&dcc->common.base, &dpi->dpi_pipe_item,
+        red_channel_client_pipe_add_after(RED_CHANNEL_CLIENT(dcc), &dpi->dpi_pipe_item,
                                           &dpi_pos_after->dpi_pipe_item);
     }
     if (num_other_linked == 0) {
@@ -739,7 +740,7 @@ static inline PipeItem *red_pipe_get_tail(DisplayChannelClient *dcc)
         return NULL;
     }
 
-    return (PipeItem*)ring_get_tail(&dcc->common.base.pipe);
+    return (PipeItem*)ring_get_tail(&RED_CHANNEL_CLIENT(dcc)->pipe);
 }
 
 static inline void red_destroy_surface(RedWorker *worker, uint32_t surface_id);
@@ -764,7 +765,7 @@ static inline void red_pipe_add_image_item(DisplayChannelClient *dcc, ImageItem 
         return;
     }
     item->refs++;
-    red_channel_client_pipe_add(&dcc->common.base, &item->link);
+    red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &item->link);
 }
 
 static inline void red_pipe_add_image_item_after(DisplayChannelClient *dcc, ImageItem *item,
@@ -774,7 +775,7 @@ static inline void red_pipe_add_image_item_after(DisplayChannelClient *dcc, Imag
         return;
     }
     item->refs++;
-    red_channel_client_pipe_add_after(&dcc->common.base, &item->link, pos);
+    red_channel_client_pipe_add_after(RED_CHANNEL_CLIENT(dcc), &item->link, pos);
 }
 
 static void release_image_item(ImageItem *item)
@@ -886,7 +887,7 @@ static inline void red_destroy_surface_item(RedWorker *worker,
     dcc->surface_client_created[surface_id] = FALSE;
     channel = RED_CHANNEL(worker->display_channel);
     destroy = get_surface_destroy_item(channel, surface_id);
-    red_channel_client_pipe_add(&dcc->common.base, &destroy->pipe_item);
+    red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &destroy->pipe_item);
 }
 
 static inline void red_destroy_surface(RedWorker *worker, uint32_t surface_id)
@@ -1186,8 +1187,8 @@ static int red_clear_surface_drawables_from_pipe(DisplayChannelClient *dcc, int 
     /* removing the newest drawables that their destination is surface_id and
        no other drawable depends on them */
 
-    rcc = &dcc->common.base;
-    ring = &dcc->common.base.pipe;
+    rcc = RED_CHANNEL_CLIENT(dcc);
+    ring = &rcc->pipe;
     item = (PipeItem *) ring;
     while ((item = (PipeItem *)ring_next(ring, (RingItem *)item))) {
         Drawable *drawable;
@@ -1235,14 +1236,14 @@ static int red_clear_surface_drawables_from_pipe(DisplayChannelClient *dcc, int 
     }
 
     if (item) {
-        return red_channel_client_wait_pipe_item_sent(&dcc->common.base, item,
+        return red_channel_client_wait_pipe_item_sent(RED_CHANNEL_CLIENT(dcc), item,
                                                       DISPLAY_CLIENT_TIMEOUT);
     } else {
         /*
          * in case that the pipe didn't contain any item that is dependent on the surface, but
          * there is one during sending. Use a shorter timeout, since it is just one item
          */
-        return red_channel_client_wait_outgoing_item(&dcc->common.base,
+        return red_channel_client_wait_outgoing_item(RED_CHANNEL_CLIENT(dcc),
                                                      DISPLAY_CLIENT_SHORT_TIMEOUT);
     }
     return TRUE;
@@ -1257,7 +1258,7 @@ static void red_clear_surface_drawables_from_pipes(RedWorker *worker,
 
     FOREACH_DCC(worker->display_channel, item, next, dcc) {
         if (!red_clear_surface_drawables_from_pipe(dcc, surface_id, wait_if_used)) {
-            red_channel_client_disconnect(&dcc->common.base);
+            red_channel_client_disconnect(RED_CHANNEL_CLIENT(dcc));
         }
     }
 }
@@ -1584,7 +1585,7 @@ static void push_stream_clip(DisplayChannelClient* dcc, StreamAgent *agent)
     item->rects = spice_malloc_n_m(n_rects, sizeof(SpiceRect), sizeof(SpiceClipRects));
     item->rects->num_rects = n_rects;
     region_ret_rects(&agent->clip, item->rects->rects, n_rects);
-    red_channel_client_pipe_add(&dcc->common.base, (PipeItem *)item);
+    red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), (PipeItem *)item);
 }
 
 static void red_display_release_stream_clip(RedWorker *worker, StreamClipItem *item)
@@ -1697,7 +1698,7 @@ static void red_stop_stream(RedWorker *worker, Stream *stream)
             }
         }
         stream->refs++;
-        red_channel_client_pipe_add(&dcc->common.base, &stream_agent->destroy_item);
+        red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &stream_agent->destroy_item);
         red_print_stream_stats(dcc, stream_agent);
     }
     worker->streams_size_total -= stream->width * stream->height;
@@ -1757,7 +1758,7 @@ static inline void red_display_detach_stream_gracefully(DisplayChannelClient *dc
         spice_debug("stream %d: upgrade by drawable. sized %d, box ==>",
                     stream_id, stream->current->sized_stream != NULL);
         rect_debug(&stream->current->red_drawable->bbox);
-        rcc = &dcc->common.base;
+        rcc = RED_CHANNEL_CLIENT(dcc);
         channel = rcc->channel;
         upgrade_item = spice_new(UpgradeItem, 1);
         upgrade_item->refs = 1;
@@ -2098,16 +2099,16 @@ static void red_display_create_stream(DisplayChannelClient *dcc, Stream *stream)
     } else {
         agent->mjpeg_encoder = mjpeg_encoder_new(FALSE, 0, NULL, NULL);
     }
-    red_channel_client_pipe_add(&dcc->common.base, &agent->create_item);
+    red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &agent->create_item);
 
-    if (red_channel_client_test_remote_cap(&dcc->common.base, SPICE_DISPLAY_CAP_STREAM_REPORT)) {
+    if (red_channel_client_test_remote_cap(RED_CHANNEL_CLIENT(dcc), SPICE_DISPLAY_CAP_STREAM_REPORT)) {
         StreamActivateReportItem *report_pipe_item = spice_malloc0(sizeof(*report_pipe_item));
 
         agent->report_id = rand();
         red_channel_pipe_item_init(dcc->common.base.channel, &report_pipe_item->pipe_item,
                                    PIPE_ITEM_TYPE_STREAM_ACTIVATE_REPORT);
         report_pipe_item->stream_id = get_stream_id(dcc->common.worker, stream);
-        red_channel_client_pipe_add(&dcc->common.base, &report_pipe_item->pipe_item);
+        red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &report_pipe_item->pipe_item);
     }
 #ifdef STREAM_STATS
     memset(&agent->stats, 0, sizeof(StreamStats));
@@ -2207,7 +2208,7 @@ static void red_display_client_init_streams(DisplayChannelClient *dcc)
         red_channel_pipe_item_init(channel, &agent->destroy_item, PIPE_ITEM_TYPE_STREAM_DESTROY);
     }
     dcc->use_mjpeg_encoder_rate_control =
-        red_channel_client_test_remote_cap(&dcc->common.base, SPICE_DISPLAY_CAP_STREAM_REPORT);
+        red_channel_client_test_remote_cap(RED_CHANNEL_CLIENT(dcc), SPICE_DISPLAY_CAP_STREAM_REPORT);
 }
 
 static void red_display_destroy_streams_agents(DisplayChannelClient *dcc)
@@ -4021,7 +4022,7 @@ static void red_push_surface_image(DisplayChannelClient *dcc, int surface_id)
     /* not allowing lossy compression because probably, especially if it is a primary surface,
        it combines both "picture-like" areas with areas that are more "artificial"*/
     red_add_surface_area_image(dcc, surface_id, &area, NULL, FALSE);
-    red_channel_client_push(&dcc->common.base);
+    red_channel_client_push(RED_CHANNEL_CLIENT(dcc));
 }
 
 static void marshaller_add_compressed(SpiceMarshaller *m,
@@ -5207,14 +5208,14 @@ int dcc_pixmap_cache_add(DisplayChannelClient *dcc, uint64_t id, uint32_t size, 
     spice_assert(size > 0);
 
     item = spice_new(NewCacheItem, 1);
-    serial = red_channel_client_get_message_serial(&dcc->common.base);
+    serial = red_channel_client_get_message_serial(RED_CHANNEL_CLIENT(dcc));
 
     pthread_mutex_lock(&cache->lock);
 
     if (cache->generation != dcc->pixmap_cache_generation) {
         if (!dcc->pending_pixmaps_sync) {
             red_channel_client_pipe_add_type(
-                &dcc->common.base, PIPE_ITEM_TYPE_PIXMAP_SYNC);
+                                             RED_CHANNEL_CLIENT(dcc), PIPE_ITEM_TYPE_PIXMAP_SYNC);
             dcc->pending_pixmaps_sync = TRUE;
         }
         pthread_mutex_unlock(&cache->lock);
@@ -5298,7 +5299,7 @@ static int dcc_pixmap_cache_hit(DisplayChannelClient *dcc, uint64_t id, int *los
     NewCacheItem *item;
     uint64_t serial;
 
-    serial = red_channel_client_get_message_serial(&dcc->common.base);
+    serial = red_channel_client_get_message_serial(RED_CHANNEL_CLIENT(dcc));
     pthread_mutex_lock(&cache->lock);
     item = cache->hash_table[BITS_CACHE_HASH_KEY(id)];
 
@@ -5334,7 +5335,7 @@ typedef enum {
 static FillBitsType fill_bits(DisplayChannelClient *dcc, SpiceMarshaller *m,
                               SpiceImage *simage, Drawable *drawable, int can_lossy)
 {
-    RedChannelClient *rcc = &dcc->common.base;
+    RedChannelClient *rcc = RED_CHANNEL_CLIENT(dcc);
     DisplayChannel *display_channel = SPICE_CONTAINEROF(rcc->channel, DisplayChannel, common.base);
     RedWorker *worker = dcc->common.worker;
     SpiceImage image;
@@ -5729,7 +5730,7 @@ static int pipe_rendered_drawables_intersect_with_areas(RedWorker *worker,
     Ring *pipe;
 
     spice_assert(num_surfaces);
-    pipe = &dcc->common.base.pipe;
+    pipe = &RED_CHANNEL_CLIENT(dcc)->pipe;
 
     for (pipe_item = (PipeItem *)ring_get_head(pipe);
          pipe_item;
@@ -5768,7 +5769,7 @@ static void red_pipe_replace_rendered_drawables_with_images(RedWorker *worker,
     resent_areas[0] = *first_area;
     num_resent = 1;
 
-    pipe = &dcc->common.base.pipe;
+    pipe = &RED_CHANNEL_CLIENT(dcc)->pipe;
 
     // going from the oldest to the newest
     for (pipe_item = (PipeItem *)ring_get_tail(pipe);
@@ -5803,7 +5804,7 @@ static void red_pipe_replace_rendered_drawables_with_images(RedWorker *worker,
         num_resent++;
 
         spice_assert(image);
-        red_channel_client_pipe_remove_and_release(&dcc->common.base, &dpi->dpi_pipe_item);
+        red_channel_client_pipe_remove_and_release(RED_CHANNEL_CLIENT(dcc), &dpi->dpi_pipe_item);
         pipe_item = &image->link;
     }
 }
@@ -7356,7 +7357,7 @@ static void dcc_pixmap_cache_reset(DisplayChannelClient *dcc, SpiceMsgWaitForCha
     uint64_t serial;
     uint32_t i;
 
-    serial = red_channel_client_get_message_serial(&dcc->common.base);
+    serial = red_channel_client_get_message_serial(RED_CHANNEL_CLIENT(dcc));
     pthread_mutex_lock(&cache->lock);
     pixmap_cache_clear(cache);
 
@@ -8003,7 +8004,7 @@ static inline void red_create_surface_item(DisplayChannelClient *dcc, int surfac
             surface_id, surface->context.width, surface->context.height,
                                      surface->context.format, flags);
     dcc->surface_client_created[surface_id] = TRUE;
-    red_channel_client_pipe_add(&dcc->common.base, &create->pipe_item);
+    red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &create->pipe_item);
 }
 
 static void red_worker_create_surface_item(RedWorker *worker, int surface_id)
@@ -8187,7 +8188,7 @@ static inline void flush_all_qxl_commands(RedWorker *worker)
 
 static void push_new_primary_surface(DisplayChannelClient *dcc)
 {
-    RedChannelClient *rcc = &dcc->common.base;
+    RedChannelClient *rcc = RED_CHANNEL_CLIENT(dcc);
 
     red_channel_client_pipe_add_type(rcc, PIPE_ITEM_TYPE_INVAL_PALLET_CACHE);
     red_create_surface_item(dcc, 0);
@@ -8200,8 +8201,8 @@ static int display_channel_client_wait_for_init(DisplayChannelClient *dcc)
     dcc->expect_init = TRUE;
     uint64_t end_time = red_get_monotonic_time() + DISPLAY_CLIENT_TIMEOUT;
     for (;;) {
-        red_channel_client_receive(&dcc->common.base);
-        if (!red_channel_client_is_connected(&dcc->common.base)) {
+        red_channel_client_receive(RED_CHANNEL_CLIENT(dcc));
+        if (!red_channel_client_is_connected(RED_CHANNEL_CLIENT(dcc))) {
             break;
         }
         if (dcc->pixmap_cache && dcc->glz_dict) {
@@ -8216,7 +8217,7 @@ static int display_channel_client_wait_for_init(DisplayChannelClient *dcc)
         }
         if (red_get_monotonic_time() > end_time) {
             spice_warning("timeout");
-            red_channel_client_disconnect(&dcc->common.base);
+            red_channel_client_disconnect(RED_CHANNEL_CLIENT(dcc));
             break;
         }
         usleep(DISPLAY_CLIENT_RETRY_INTERVAL);
@@ -8228,9 +8229,9 @@ static void on_new_display_channel_client(DisplayChannelClient *dcc)
 {
     DisplayChannel *display_channel = DCC_TO_DC(dcc);
     RedWorker *worker = display_channel->common.worker;
-    RedChannelClient *rcc = &dcc->common.base;
+    RedChannelClient *rcc = RED_CHANNEL_CLIENT(dcc);
 
-    red_channel_client_push_set_ack(&dcc->common.base);
+    red_channel_client_push_set_ack(RED_CHANNEL_CLIENT(dcc));
 
     if (red_channel_client_waits_for_migrate_data(rcc)) {
         return;
@@ -8239,7 +8240,7 @@ static void on_new_display_channel_client(DisplayChannelClient *dcc)
     if (!display_channel_client_wait_for_init(dcc)) {
         return;
     }
-    red_channel_client_ack_zero_messages_window(&dcc->common.base);
+    red_channel_client_ack_zero_messages_window(RED_CHANNEL_CLIENT(dcc));
     if (worker->surfaces[0].context.canvas) {
         red_current_flush(worker, 0);
         push_new_primary_surface(dcc);
