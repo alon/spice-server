@@ -519,7 +519,6 @@ static void display_channel_client_release_item_before_push(DisplayChannelClient
                                                             PipeItem *item);
 static void display_channel_client_release_item_after_push(DisplayChannelClient *dcc,
                                                            PipeItem *item);
-static void dcc_push_monitors_config(DisplayChannelClient *dcc);
 
 /*
  * Macros to make iterating over stuff easier
@@ -9484,29 +9483,6 @@ void handle_dev_destroy_surfaces(void *opaque, uint32_t message_type, void *payl
     dev_destroy_surfaces(worker);
 }
 
-static MonitorsConfigItem *monitors_config_item_new(
-    RedChannel* channel, MonitorsConfig *monitors_config)
-{
-    MonitorsConfigItem *mci;
-
-    mci = (MonitorsConfigItem *)spice_malloc(sizeof(*mci));
-    mci->monitors_config = monitors_config;
-
-    red_channel_pipe_item_init(channel,
-            &mci->pipe_item, PIPE_ITEM_TYPE_MONITORS_CONFIG);
-    return mci;
-}
-
-static inline void red_monitors_config_item_add(DisplayChannelClient *dcc)
-{
-    DisplayChannel *dc = DCC_TO_DC(dcc);
-    MonitorsConfigItem *mci;
-
-    mci = monitors_config_item_new(dcc->common.base.channel,
-                                   monitors_config_ref(dc->monitors_config));
-    red_channel_client_pipe_add(&dcc->common.base, &mci->pipe_item);
-}
-
 static void display_update_monitors_config(DisplayChannel *display,
                                            QXLMonitorsConfig *config)
 {
@@ -9516,23 +9492,6 @@ static void display_update_monitors_config(DisplayChannel *display,
     display->monitors_config =
         monitors_config_new(config->heads, config->count, config->max_allowed);
 
-}
-
-static void dcc_push_monitors_config(DisplayChannelClient *dcc)
-{
-    MonitorsConfig *monitors_config = DCC_TO_DC(dcc)->monitors_config;
-
-    if (monitors_config == NULL) {
-        spice_warning("monitors_config is NULL");
-        return;
-    }
-
-    if (!red_channel_client_test_remote_cap(&dcc->common.base,
-                                            SPICE_DISPLAY_CAP_MONITORS_CONFIG)) {
-        return;
-    }
-    red_monitors_config_item_add(dcc);
-    red_channel_client_push(&dcc->common.base);
 }
 
 static void red_worker_push_monitors_config(RedWorker *worker)
