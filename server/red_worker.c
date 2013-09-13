@@ -753,7 +753,7 @@ static inline void red_pipes_remove_drawable(Drawable *drawable)
     RING_FOREACH_SAFE(item, next, &drawable->pipes) {
         dpi = SPICE_CONTAINEROF(item, DrawablePipeItem, base);
         if (pipe_item_is_linked(&dpi->dpi_pipe_item)) {
-            red_channel_client_pipe_remove_and_release(&dpi->dcc->common.base,
+            red_channel_client_pipe_remove_and_release(RED_CHANNEL_CLIENT(dpi->dcc),
                                                        &dpi->dpi_pipe_item);
         }
     }
@@ -1561,7 +1561,7 @@ static inline void red_detach_stream(RedWorker *worker, Stream *stream, int deta
 static StreamClipItem *__new_stream_clip(DisplayChannelClient* dcc, StreamAgent *agent)
 {
     StreamClipItem *item = spice_new(StreamClipItem, 1);
-    red_channel_pipe_item_init(dcc->common.base.channel,
+    red_channel_pipe_item_init(RED_CHANNEL_CLIENT(dcc)->channel,
                     (PipeItem *)item, PIPE_ITEM_TYPE_STREAM_CLIP);
 
     item->stream_agent = agent;
@@ -1966,7 +1966,7 @@ static uint64_t red_stream_get_initial_bit_rate(DisplayChannelClient *dcc,
         MainChannelClient *mcc;
         uint64_t net_test_bit_rate;
 
-        mcc = red_client_get_main(dcc->common.base.client);
+        mcc = red_client_get_main(RED_CHANNEL_CLIENT(dcc)->client);
         net_test_bit_rate = main_channel_client_is_network_info_initialized(mcc) ?
                                 main_channel_client_get_bitrate_per_sec(mcc) :
                                 0;
@@ -1997,9 +1997,9 @@ static uint32_t red_stream_mjpeg_encoder_get_roundtrip(void *opaque)
     int roundtrip;
 
     spice_assert(agent);
-    roundtrip = red_channel_client_get_roundtrip_ms(&agent->dcc->common.base);
+    roundtrip = red_channel_client_get_roundtrip_ms(RED_CHANNEL_CLIENT(agent->dcc));
     if (roundtrip < 0) {
-        MainChannelClient *mcc = red_client_get_main(agent->dcc->common.base.client);
+        MainChannelClient *mcc = red_client_get_main(RED_CHANNEL_CLIENT(agent->dcc)->client);
 
         /*
          * the main channel client roundtrip might not have been
@@ -2066,7 +2066,7 @@ static void red_stream_update_client_playback_latency(void *opaque, uint32_t del
          agent->dcc->streams_max_latency = delay_ms;
     }
     spice_debug("reseting client latency: %u", agent->dcc->streams_max_latency);
-    main_dispatcher_set_mm_time_latency(agent->dcc->common.base.client, agent->dcc->streams_max_latency);
+    main_dispatcher_set_mm_time_latency(RED_CHANNEL_CLIENT(agent->dcc)->client, agent->dcc->streams_max_latency);
 }
 
 static void red_display_create_stream(DisplayChannelClient *dcc, Stream *stream)
@@ -2105,7 +2105,7 @@ static void red_display_create_stream(DisplayChannelClient *dcc, Stream *stream)
         StreamActivateReportItem *report_pipe_item = spice_malloc0(sizeof(*report_pipe_item));
 
         agent->report_id = rand();
-        red_channel_pipe_item_init(dcc->common.base.channel, &report_pipe_item->pipe_item,
+        red_channel_pipe_item_init(RED_CHANNEL_CLIENT(dcc)->channel, &report_pipe_item->pipe_item,
                                    PIPE_ITEM_TYPE_STREAM_ACTIVATE_REPORT);
         report_pipe_item->stream_id = get_stream_id(dcc->common.worker, stream);
         red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &report_pipe_item->pipe_item);
@@ -2197,7 +2197,7 @@ static void red_display_client_init_streams(DisplayChannelClient *dcc)
 {
     int i;
     RedWorker *worker = dcc->common.worker;
-    RedChannel *channel = dcc->common.base.channel;
+    RedChannel *channel = RED_CHANNEL_CLIENT(dcc)->channel;
 
     for (i = 0; i < NUM_STREAMS; i++) {
         StreamAgent *agent = &dcc->stream_agents[i];
@@ -8000,7 +8000,7 @@ static inline void red_create_surface_item(DisplayChannelClient *dcc, int surfac
         return;
     }
     surface = &worker->surfaces[surface_id];
-    create = get_surface_create_item(dcc->common.base.channel,
+    create = get_surface_create_item(RED_CHANNEL_CLIENT(dcc)->channel,
             surface_id, surface->context.width, surface->context.height,
                                      surface->context.format, flags);
     dcc->surface_client_created[surface_id] = TRUE;
@@ -8295,7 +8295,7 @@ static GlzSharedDictionary *red_create_glz_dictionary(DisplayChannelClient *dcc,
         spice_critical("failed creating lz dictionary");
         return NULL;
     }
-    return _red_create_glz_dictionary(dcc->common.base.client, id, glz_dict);
+    return _red_create_glz_dictionary(RED_CHANNEL_CLIENT(dcc)->client, id, glz_dict);
 }
 
 static GlzSharedDictionary *red_create_restored_glz_dictionary(DisplayChannelClient *dcc,
@@ -8308,7 +8308,7 @@ static GlzSharedDictionary *red_create_restored_glz_dictionary(DisplayChannelCli
         spice_critical("failed creating lz dictionary");
         return NULL;
     }
-    return _red_create_glz_dictionary(dcc->common.base.client, id, glz_dict);
+    return _red_create_glz_dictionary(RED_CHANNEL_CLIENT(dcc)->client, id, glz_dict);
 }
 
 static GlzSharedDictionary *red_get_glz_dictionary(DisplayChannelClient *dcc,
@@ -8318,7 +8318,7 @@ static GlzSharedDictionary *red_get_glz_dictionary(DisplayChannelClient *dcc,
 
     pthread_mutex_lock(&glz_dictionary_list_lock);
 
-    shared_dict = _red_find_glz_dictionary(dcc->common.base.client, id);
+    shared_dict = _red_find_glz_dictionary(RED_CHANNEL_CLIENT(dcc)->client, id);
 
     if (!shared_dict) {
         shared_dict = red_create_glz_dictionary(dcc, id, window_size);
@@ -8338,7 +8338,7 @@ static GlzSharedDictionary *red_restore_glz_dictionary(DisplayChannelClient *dcc
 
     pthread_mutex_lock(&glz_dictionary_list_lock);
 
-    shared_dict = _red_find_glz_dictionary(dcc->common.base.client, id);
+    shared_dict = _red_find_glz_dictionary(RED_CHANNEL_CLIENT(dcc)->client, id);
 
     if (!shared_dict) {
         shared_dict = red_create_restored_glz_dictionary(dcc, id, restore_data);
@@ -8388,7 +8388,7 @@ static void red_release_glz(DisplayChannelClient *dcc)
 static int display_channel_init_cache(DisplayChannelClient *dcc, SpiceMsgcDisplayInit *init_info)
 {
     spice_assert(!dcc->pixmap_cache);
-    return !!(dcc->pixmap_cache = pixmap_cache_get(dcc->common.base.client,
+    return !!(dcc->pixmap_cache = pixmap_cache_get(RED_CHANNEL_CLIENT(dcc)->client,
                                                    init_info->pixmap_cache_id,
                                                    init_info->pixmap_cache_size));
 }
@@ -8524,7 +8524,7 @@ static int display_channel_handle_migrate_data(RedChannelClient *rcc, uint32_t s
      * channel client that froze the cache on the src size receives the migrate
      * data and unfreezes the cache by setting its size > 0 and by triggering
      * pixmap_cache_reset */
-    dcc->pixmap_cache = pixmap_cache_get(dcc->common.base.client,
+    dcc->pixmap_cache = pixmap_cache_get(RED_CHANNEL_CLIENT(dcc)->client,
                                          migrate_data->pixmap_cache_id, -1);
     if (!dcc->pixmap_cache) {
         return FALSE;
