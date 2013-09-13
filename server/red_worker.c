@@ -732,8 +732,8 @@ static inline void red_handle_drawable_surfaces_client_synced(
 
 static int display_is_connected(RedWorker *worker)
 {
-    return (worker->display_channel && red_channel_is_connected(
-        &worker->display_channel->common.base));
+    return worker->display_channel &&
+        red_channel_is_connected(RED_CHANNEL(worker->display_channel));
 }
 
 static int cursor_is_connected(RedWorker *worker)
