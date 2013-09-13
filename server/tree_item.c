@@ -164,3 +164,42 @@ void tree_item_dump(TreeItem *item)
     spice_return_if_fail(item != NULL);
     tree_foreach(item, dump_item, &di);
 }
+
+Shadow* shadow_new(DrawItem *item, const SpicePoint *delta)
+{
+    spice_return_val_if_fail(item->shadow == NULL, NULL);
+    if (!delta->x && !delta->y) {
+        return NULL;
+    }
+
+    Shadow *shadow = spice_new(Shadow, 1);
+
+    shadow->base.type = TREE_ITEM_TYPE_SHADOW;
+    shadow->base.container = NULL;
+    shadow->owner = item;
+    region_clone(&shadow->base.rgn, &item->base.rgn);
+    region_offset(&shadow->base.rgn, delta->x, delta->y);
+    ring_item_init(&shadow->base.siblings_link);
+    region_init(&shadow->on_hold);
+    item->shadow = shadow;
+
+    return shadow;
+}
+
+Container* container_new(DrawItem *item)
+{
+    Container *container = spice_new(Container, 1);
+
+    container->base.type = TREE_ITEM_TYPE_CONTAINER;
+    container->base.container = item->base.container;
+    item->base.container = container;
+    item->container_root = TRUE;
+    region_clone(&container->base.rgn, &item->base.rgn);
+    ring_item_init(&container->base.siblings_link);
+    ring_add_after(&container->base.siblings_link, &item->base.siblings_link);
+    ring_remove(&item->base.siblings_link);
+    ring_init(&container->items);
+    ring_add(&container->items, &item->base.siblings_link);
+
+    return container;
+}
