@@ -11,8 +11,6 @@
 #define BITS_CACHE_HASH_MASK (BITS_CACHE_HASH_SIZE - 1)
 #define BITS_CACHE_HASH_KEY(id) ((id) & BITS_CACHE_HASH_MASK)
 
-typedef struct _DisplayChannelClient DisplayChannelClient;
-
 typedef struct _PixmapCache PixmapCache;
 typedef struct _NewCacheItem NewCacheItem;
 

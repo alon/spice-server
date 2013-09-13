@@ -56,43 +56,6 @@ struct _DrawItem {
 #define IS_DRAW_ITEM(item) ((item)->type == TREE_ITEM_TYPE_DRAWABLE)
 #define DRAW_ITEM(item) ((DrawItem*)(item))
 
-typedef struct DependItem {
-    Drawable *drawable;
-    RingItem ring_item;
-} DependItem;
-
-struct Drawable {
-    uint8_t refs;
-    RingItem surface_list_link;
-    RingItem list_link;
-    DrawItem tree_item;
-    Ring pipes;
-    PipeItem *pipe_item_rest;
-    uint32_t size_pipe_item_rest;
-    RedDrawable *red_drawable;
-
-    Ring glz_ring;
-
-    red_time_t creation_time;
-    int frames_count;
-    int gradual_frames_count;
-    int last_gradual_frame;
-    Stream *stream;
-    Stream *sized_stream;
-    int streamable;
-    BitmapGradualType copy_bitmap_graduality;
-    uint32_t group_id;
-    DependItem depend_items[3];
-
-    uint8_t *backed_surface_data;
-    DependItem pipe_depend_items[3];
-
-    int surface_id;
-    int surfaces_dest[3];
-
-    uint32_t process_commands_generation;
-};
-
 void       tree_item_dump                           (TreeItem *item);
 Shadow*    shadow_new                               (DrawItem *item, const SpicePoint *delta);
 Container* container_new                            (DrawItem *item);
