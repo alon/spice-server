@@ -312,4 +312,35 @@ MonitorsConfig*            monitors_config_new                       (QXLHead *h
 MonitorsConfig *           monitors_config_ref                       (MonitorsConfig *config);
 void                       monitors_config_unref                     (MonitorsConfig *config);
 
+struct DisplayChannel {
+    CommonChannel common; // Must be the first thing
+
+    MonitorsConfig *monitors_config;
+
+    uint32_t num_renderers;
+    uint32_t renderers[RED_RENDERER_LAST];
+    uint32_t renderer;
+
+    int enable_jpeg;
+    int jpeg_quality;
+    int enable_zlib_glz_wrap;
+    int zlib_level;
+
+    RedCompressBuf *free_compress_bufs;
+
+#ifdef RED_STATISTICS
+    uint64_t *cache_hits_counter;
+    uint64_t *add_to_cache_counter;
+    uint64_t *non_cache_counter;
+#endif
+#ifdef COMPRESS_STAT
+    stat_info_t lz_stat;
+    stat_info_t glz_stat;
+    stat_info_t quic_stat;
+    stat_info_t jpeg_stat;
+    stat_info_t zlib_glz_stat;
+    stat_info_t jpeg_alpha_stat;
+#endif
+};
+
 #endif /* DISPLAY_CHANNEL_H_ */
