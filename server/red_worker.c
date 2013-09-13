@@ -1728,7 +1728,7 @@ static inline void red_display_detach_stream_gracefully(DisplayChannelClient *dc
                                                         Stream *stream,
                                                         Drawable *update_area_limit)
 {
-    int stream_id = get_stream_id(dcc->common.worker, stream);
+    int stream_id = get_stream_id(DCC_TO_WORKER(dcc), stream);
     StreamAgent *agent = &dcc->stream_agents[stream_id];
 
     /* stopping the client from playing older frames at once*/
@@ -1781,9 +1781,9 @@ static inline void red_display_detach_stream_gracefully(DisplayChannelClient *dc
                     stream_id, stream->current != NULL);
         rect_debug(&upgrade_area);
         if (update_area_limit) {
-            red_update_area_till(dcc->common.worker, &upgrade_area, 0, update_area_limit);
+            red_update_area_till(DCC_TO_WORKER(dcc), &upgrade_area, 0, update_area_limit);
         } else {
-            red_update_area(dcc->common.worker, &upgrade_area, 0);
+            red_update_area(DCC_TO_WORKER(dcc), &upgrade_area, 0);
         }
         red_add_surface_area_image(dcc, 0, &upgrade_area, NULL, FALSE);
     }
@@ -1988,7 +1988,7 @@ static uint64_t red_stream_get_initial_bit_rate(DisplayChannelClient *dcc,
     /* dividing the available bandwidth among the active streams, and saving
      * (1-RED_STREAM_CHANNEL_CAPACITY) of it for other messages */
     return (RED_STREAM_CHANNEL_CAPACITY * bit_rate *
-           stream->width * stream->height) / dcc->common.worker->streams_size_total;
+            stream->width * stream->height) / DCC_TO_WORKER(dcc)->streams_size_total;
 }
 
 static uint32_t red_stream_mjpeg_encoder_get_roundtrip(void *opaque)
@@ -2030,7 +2030,7 @@ static void red_display_update_streams_max_latency(DisplayChannelClient *dcc, St
     }
 
     dcc->streams_max_latency = 0;
-    if (dcc->common.worker->stream_count == 1) {
+    if (DCC_TO_WORKER(dcc)->stream_count == 1) {
         return;
     }
     for (i = 0; i < NUM_STREAMS; i++) {
@@ -2071,7 +2071,7 @@ static void red_stream_update_client_playback_latency(void *opaque, uint32_t del
 
 static void red_display_create_stream(DisplayChannelClient *dcc, Stream *stream)
 {
-    StreamAgent *agent = &dcc->stream_agents[get_stream_id(dcc->common.worker, stream)];
+    StreamAgent *agent = &dcc->stream_agents[get_stream_id(DCC_TO_WORKER(dcc), stream)];
 
     stream->refs++;
     spice_assert(region_is_empty(&agent->vis_region));
@@ -2107,7 +2107,7 @@ static void red_display_create_stream(DisplayChannelClient *dcc, Stream *stream)
         agent->report_id = rand();
         red_channel_pipe_item_init(RED_CHANNEL_CLIENT(dcc)->channel, &report_pipe_item->pipe_item,
                                    PIPE_ITEM_TYPE_STREAM_ACTIVATE_REPORT);
-        report_pipe_item->stream_id = get_stream_id(dcc->common.worker, stream);
+        report_pipe_item->stream_id = get_stream_id(DCC_TO_WORKER(dcc), stream);
         red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &report_pipe_item->pipe_item);
     }
 #ifdef STREAM_STATS
@@ -2184,7 +2184,7 @@ static void red_create_stream(RedWorker *worker, Drawable *drawable)
 
 static void red_disply_start_streams(DisplayChannelClient *dcc)
 {
-    Ring *ring = &dcc->common.worker->streams;
+    Ring *ring = &DCC_TO_WORKER(dcc)->streams;
     RingItem *item = ring;
 
     while ((item = ring_next(ring, item))) {
@@ -2196,7 +2196,7 @@ static void red_disply_start_streams(DisplayChannelClient *dcc)
 static void red_display_client_init_streams(DisplayChannelClient *dcc)
 {
     int i;
-    RedWorker *worker = dcc->common.worker;
+    RedWorker *worker = DCC_TO_WORKER(dcc);
     RedChannel *channel = RED_CHANNEL_CLIENT(dcc)->channel;
 
     for (i = 0; i < NUM_STREAMS; i++) {
@@ -4171,7 +4171,7 @@ static RedGlzDrawable *red_display_get_glz_drawable(DisplayChannelClient *dcc, D
     ring_item_init(&ret->drawable_link);
     ring_add_before(&ret->link, &dcc->glz_drawables);
     ring_add(&drawable->glz_ring, &ret->drawable_link);
-    dcc->common.worker->glz_drawable_count++;
+    DCC_TO_WORKER(dcc)->glz_drawable_count++;
     return ret;
 }
 
@@ -5337,7 +5337,7 @@ static FillBitsType fill_bits(DisplayChannelClient *dcc, SpiceMarshaller *m,
 {
     RedChannelClient *rcc = RED_CHANNEL_CLIENT(dcc);
     DisplayChannel *display_channel = SPICE_CONTAINEROF(rcc->channel, DisplayChannel, common.base);
-    RedWorker *worker = dcc->common.worker;
+    RedWorker *worker = DCC_TO_WORKER(dcc);
     SpiceImage image;
     compress_send_data_t comp_send_data = {0};
     SpiceMarshaller *bitmap_palette_out, *lzplt_palette_out;
@@ -5516,7 +5516,7 @@ static int is_surface_area_lossy(DisplayChannelClient *dcc, uint32_t surface_id,
     RedSurface *surface;
     QRegion *surface_lossy_region;
     QRegion lossy_region;
-    RedWorker *worker = dcc->common.worker;
+    RedWorker *worker = DCC_TO_WORKER(dcc);
 
     VALIDATE_SURFACE_RETVAL(worker, surface_id, FALSE);
     surface = &worker->surfaces[surface_id];
@@ -7082,7 +7082,7 @@ static int encode_frame(DisplayChannelClient *dcc, const SpiceRect *src,
     uint32_t image_stride;
     size_t offset;
     int i, chunk;
-    StreamAgent *agent = &dcc->stream_agents[stream - dcc->common.worker->streams_buf];
+    StreamAgent *agent = &dcc->stream_agents[stream - DCC_TO_WORKER(dcc)->streams_buf];
 
     chunks = image->data;
     offset = 0;
@@ -7120,7 +7120,7 @@ static inline int red_marshall_stream_data(RedChannelClient *rcc,
     DisplayChannel *display_channel = SPICE_CONTAINEROF(rcc->channel, DisplayChannel, common.base);
     Stream *stream = drawable->stream;
     SpiceImage *image;
-    RedWorker *worker = dcc->common.worker;
+    RedWorker *worker = DCC_TO_WORKER(dcc);
     uint32_t frame_mm_time;
     int n;
     int width, height;
@@ -7564,7 +7564,7 @@ static void red_display_marshall_stream_start(RedChannelClient *rcc,
     SpiceClipRects clip_rects;
 
     stream_create.surface_id = 0;
-    stream_create.id = get_stream_id(dcc->common.worker, stream);
+    stream_create.id = get_stream_id(DCC_TO_WORKER(dcc), stream);
     stream_create.flags = stream->top_down ? SPICE_STREAM_FLAGS_TOP_DOWN : 0;
     stream_create.codec_type = SPICE_VIDEO_CODEC_TYPE_MJPEG;
 
@@ -7600,7 +7600,7 @@ static void red_display_marshall_stream_clip(RedChannelClient *rcc,
     red_channel_client_init_send_data(rcc, SPICE_MSG_DISPLAY_STREAM_CLIP, &item->base);
     SpiceMsgDisplayStreamClip stream_clip;
 
-    stream_clip.id = get_stream_id(dcc->common.worker, agent->stream);
+    stream_clip.id = get_stream_id(DCC_TO_WORKER(dcc), agent->stream);
     stream_clip.clip.type = item->clip_type;
     stream_clip.clip.rects = item->rects;
 
@@ -7614,7 +7614,7 @@ static void red_display_marshall_stream_end(RedChannelClient *rcc,
     SpiceMsgDisplayStreamDestroy destroy;
 
     red_channel_client_init_send_data(rcc, SPICE_MSG_DISPLAY_STREAM_DESTROY, NULL);
-    destroy.id = get_stream_id(dcc->common.worker, agent->stream);
+    destroy.id = get_stream_id(DCC_TO_WORKER(dcc), agent->stream);
     red_display_stream_agent_stop(dcc, agent);
     spice_marshall_msg_display_stream_destroy(base_marshaller, &destroy);
 }
@@ -7991,7 +7991,7 @@ static inline void red_create_surface_item(DisplayChannelClient *dcc, int surfac
 {
     RedSurface *surface;
     SurfaceCreateItem *create;
-    RedWorker *worker = dcc ? dcc->common.worker : NULL;
+    RedWorker *worker = dcc ? DCC_TO_WORKER(dcc) : NULL;
     uint32_t flags = is_primary_surface(worker, surface_id) ? SPICE_SURFACE_FLAGS_PRIMARY : 0;
 
     /* don't send redundant create surface commands to client */
@@ -8558,10 +8558,10 @@ static int display_channel_handle_migrate_data(RedChannelClient *rcc, uint32_t s
 
     if (migrate_data->low_bandwidth_setting) {
         red_channel_client_ack_set_client_window(rcc, WIDE_CLIENT_ACK_WINDOW);
-        if (dcc->common.worker->jpeg_state == SPICE_WAN_COMPRESSION_AUTO) {
+        if (DCC_TO_WORKER(dcc)->jpeg_state == SPICE_WAN_COMPRESSION_AUTO) {
             display_channel->enable_jpeg = TRUE;
         }
-        if (dcc->common.worker->zlib_glz_state == SPICE_WAN_COMPRESSION_AUTO) {
+        if (DCC_TO_WORKER(dcc)->zlib_glz_state == SPICE_WAN_COMPRESSION_AUTO) {
             display_channel->enable_zlib_glz_wrap = TRUE;
         }
     }
@@ -8922,7 +8922,7 @@ static void display_channel_hold_pipe_item(RedChannelClient *rcc, PipeItem *item
 static void display_channel_client_release_item_after_push(DisplayChannelClient *dcc,
                                                            PipeItem *item)
 {
-    RedWorker *worker = dcc->common.worker;
+    RedWorker *worker = DCC_TO_WORKER(dcc);
 
     switch (item->type) {
     case PIPE_ITEM_TYPE_DRAW:
@@ -8957,7 +8957,7 @@ static void display_channel_client_release_item_after_push(DisplayChannelClient 
 static void display_channel_client_release_item_before_push(DisplayChannelClient *dcc,
                                                             PipeItem *item)
 {
-    RedWorker *worker = dcc->common.worker;
+    RedWorker *worker = DCC_TO_WORKER(dcc);
 
     switch (item->type) {
     case PIPE_ITEM_TYPE_DRAW: {
@@ -9029,7 +9029,7 @@ static void display_channel_release_item(RedChannelClient *rcc, PipeItem *item, 
         display_channel_client_release_item_before_push(dcc, item);
     }
 
-    RedWorker *worker = dcc->common.worker;
+    RedWorker *worker = DCC_TO_WORKER(dcc);
     worker->timeout = 0;
 }
 
