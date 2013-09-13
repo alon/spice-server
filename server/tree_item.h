@@ -35,10 +35,16 @@ struct _Shadow {
     DrawItem* owner;
 };
 
+#define IS_SHADOW(item) ((item)->type == TREE_ITEM_TYPE_SHADOW)
+#define SHADOW(item) ((Container*)(item))
+
 struct _Container {
     TreeItem base;
     Ring items;
 };
+
+#define IS_CONTAINER(item) ((item)->type == TREE_ITEM_TYPE_CONTAINER)
+#define CONTAINER(item) ((Container*)(item))
 
 struct _DrawItem {
     TreeItem base;
@@ -48,6 +54,7 @@ struct _DrawItem {
 };
 
 #define IS_DRAW_ITEM(item) ((item)->type == TREE_ITEM_TYPE_DRAWABLE)
+#define DRAW_ITEM(item) ((DrawItem*)(item))
 
 typedef struct DependItem {
     Drawable *drawable;
@@ -87,5 +94,7 @@ struct Drawable {
 };
 
 void       tree_item_dump                           (TreeItem *item);
+Shadow*    shadow_new                               (DrawItem *item, const SpicePoint *delta);
+Container* container_new                            (DrawItem *item);
 
 #endif /* TREE_ITEM_H_ */

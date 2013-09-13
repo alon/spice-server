@@ -1611,24 +1611,6 @@ static void exclude_region(RedWorker *worker, Ring *ring, RingItem *ring_item, Q
     }
 }
 
-static inline Container *__new_container(RedWorker *worker, DrawItem *item)
-{
-    Container *container = spice_new(Container, 1);
-    worker->containers_count++;
-    container->base.type = TREE_ITEM_TYPE_CONTAINER;
-    container->base.container = item->base.container;
-    item->base.container = container;
-    item->container_root = TRUE;
-    region_clone(&container->base.rgn, &item->base.rgn);
-    ring_item_init(&container->base.siblings_link);
-    ring_add_after(&container->base.siblings_link, &item->base.siblings_link);
-    ring_remove(&item->base.siblings_link);
-    ring_init(&container->items);
-    ring_add(&container->items, &item->base.siblings_link);
-
-    return container;
-}
-
 static inline int is_opaque_item(TreeItem *item)
 {
     return item->type == TREE_ITEM_TYPE_CONTAINER ||
@@ -2954,8 +2936,8 @@ static inline int red_current_add(RedWorker *worker, Ring *ring, Drawable *drawa
                     continue;
                 }
                 spice_assert(IS_DRAW_ITEM(sibling));
-                if (!((DrawItem *)sibling)->container_root) {
-                    container = __new_container(worker, (DrawItem *)sibling);
+                if (!DRAW_ITEM(sibling)->container_root) {
+                    container = container_new(DRAW_ITEM(sibling));
                     if (!container) {
                         spice_warning("create new container failed");
                         region_destroy(&exclude_rgn);
@@ -2989,7 +2971,7 @@ static inline int red_current_add(RedWorker *worker, Ring *ring, Drawable *drawa
          * before calling red_detach_streams_behind
          */
         __current_add_drawable(worker, drawable, ring);
-        if (drawable->surface_id == 0) {
+        if (is_primary_surface(worker, drawable->surface_id)) {
             red_detach_streams_behind(worker, &drawable->tree_item.base.rgn, drawable);
         }
     }
@@ -3007,31 +2989,6 @@ static void add_clip_rects(QRegion *rgn, SpiceClipRects *data)
     }
 }
 
-static inline Shadow *__new_shadow(RedWorker *worker, Drawable *item)
-{
-    RedDrawable *red_drawable = item->red_drawable;
-    SpicePoint delta = {
-        .x = red_drawable->u.copy_bits.src_pos.x - red_drawable->bbox.left,
-        .y = red_drawable->u.copy_bits.src_pos.y - red_drawable->bbox.top
-    };
-
-    if (!delta.x && !delta.y) {
-        return NULL;
-    }
-
-    Shadow *shadow = spice_new(Shadow, 1);
-    worker->shadows_count++;
-    shadow->base.type = TREE_ITEM_TYPE_SHADOW;
-    shadow->base.container = NULL;
-    shadow->owner = &item->tree_item;
-    region_clone(&shadow->base.rgn, &item->tree_item.base.rgn);
-    region_offset(&shadow->base.rgn, delta.x, delta.y);
-    ring_item_init(&shadow->base.siblings_link);
-    region_init(&shadow->on_hold);
-    item->tree_item.shadow = shadow;
-    return shadow;
-}
-
 static inline int red_current_add_with_shadow(RedWorker *worker, Ring *ring, Drawable *item)
 {
 #ifdef RED_WORKER_STAT
@@ -3039,11 +2996,18 @@ static inline int red_current_add_with_shadow(RedWorker *worker, Ring *ring, Dra
     ++worker->add_with_shadow_count;
 #endif
 
-    Shadow *shadow = __new_shadow(worker, item);
+    RedDrawable *red_drawable = item->red_drawable;
+    SpicePoint delta = {
+        .x = red_drawable->u.copy_bits.src_pos.x - red_drawable->bbox.left,
+        .y = red_drawable->u.copy_bits.src_pos.y - red_drawable->bbox.top
+    };
+
+    Shadow *shadow = shadow_new(&item->tree_item, &delta);
     if (!shadow) {
         stat_add(&worker->add_stat, start_time);
         return FALSE;
     }
+    worker->shadows_count++;
     // item and his shadow must initially be placed in the same container.
     // for now putting them on root.
 
@@ -3051,6 +3015,7 @@ static inline int red_current_add_with_shadow(RedWorker *worker, Ring *ring, Dra
     if (is_primary_surface(worker, item->surface_id)) {
         red_detach_streams_behind(worker, &shadow->base.rgn, NULL);
     }
+
     ring_add(ring, &shadow->base.siblings_link);
     __current_add_drawable(worker, item, ring);
     if (item->tree_item.effect == QXL_EFFECT_OPAQUE) {
@@ -3060,7 +3025,7 @@ static inline int red_current_add_with_shadow(RedWorker *worker, Ring *ring, Dra
         region_destroy(&exclude_rgn);
         red_streams_update_visible_region(worker, item);
     } else {
-        if (item->surface_id == 0) {
+        if (is_primary_surface(worker, item->surface_id)) {
             red_detach_streams_behind(worker, &item->tree_item.base.rgn, item);
         }
     }
