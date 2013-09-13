@@ -28,6 +28,7 @@ struct _TreeItem {
     QRegion rgn;
 };
 
+/* A region "below" a copy, or the src region of the copy */
 struct _Shadow {
     TreeItem base;
     QRegion on_hold;
