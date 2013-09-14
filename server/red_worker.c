@@ -343,7 +343,6 @@ typedef struct RedWorker {
     uint32_t glz_drawable_count;
     uint32_t bits_unique;
     RedMemSlotInfo mem_slots;
-    uint32_t preload_group_id;
 
     spice_image_compression_t image_compression;
     spice_wan_compression_t jpeg_state;
@@ -3113,8 +3112,6 @@ static void red_draw_qxl_drawable(RedWorker *worker, Drawable *drawable)
     canvas = surface->context.canvas;
 
     image_cache_aging(&display->image_cache);
-
-    worker->preload_group_id = drawable->group_id;
 
     if (!canvas) {
         spice_warning("ignoring drawable to destroyed surface %d\n", drawable->surface_id);
