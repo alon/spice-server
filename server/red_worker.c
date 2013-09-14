@@ -219,16 +219,6 @@ double inline stat_byte_to_mega(uint64_t size)
 
 #define MAX_LZ_ENCODERS MAX_CACHE_CLIENTS
 
-typedef struct SurfaceCreateItem {
-    SpiceMsgSurfaceCreate surface_create;
-    PipeItem pipe_item;
-} SurfaceCreateItem;
-
-typedef struct SurfaceDestroyItem {
-    SpiceMsgSurfaceDestroy surface_destroy;
-    PipeItem pipe_item;
-} SurfaceDestroyItem;
-
 #define MAX_PIPE_SIZE 50
 
 #define WIDE_CLIENT_ACK_WINDOW 40
@@ -312,13 +302,6 @@ struct _Drawable {
         _Drawable *next;
     } u;
 };
-
-typedef struct UpgradeItem {
-    PipeItem base;
-    int refs;
-    Drawable *drawable;
-    SpiceClipRects *rects;
-} UpgradeItem;
 
 typedef struct DrawContext {
     SpiceCanvas *canvas;
@@ -927,38 +910,6 @@ static void drawables_init(RedWorker *worker)
 }
 
 
-static SurfaceDestroyItem *get_surface_destroy_item(RedChannel *channel,
-                                                    uint32_t surface_id)
-{
-    SurfaceDestroyItem *destroy;
-
-    destroy = (SurfaceDestroyItem *)malloc(sizeof(SurfaceDestroyItem));
-    spice_warn_if(!destroy);
-
-    destroy->surface_destroy.surface_id = surface_id;
-
-    red_channel_pipe_item_init(channel,
-        &destroy->pipe_item, PIPE_ITEM_TYPE_DESTROY_SURFACE);
-
-    return destroy;
-}
-
-static inline void red_destroy_surface_item(RedWorker *worker,
-    DisplayChannelClient *dcc, uint32_t surface_id)
-{
-    SurfaceDestroyItem *destroy;
-    RedChannel *channel;
-
-    if (!dcc || worker->display_channel->common.during_target_migrate ||
-        !dcc->surface_client_created[surface_id]) {
-        return;
-    }
-    dcc->surface_client_created[surface_id] = FALSE;
-    channel = RED_CHANNEL(worker->display_channel);
-    destroy = get_surface_destroy_item(channel, surface_id);
-    red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &destroy->pipe_item);
-}
-
 static void stop_streams(DisplayChannel *display)
 {
     Ring *ring = &display->streams;
@@ -1005,7 +956,7 @@ static void red_surface_unref(RedWorker *worker, uint32_t surface_id)
     region_destroy(&surface->draw_dirty_region);
     surface->context.canvas = NULL;
     FOREACH_DCC(worker->display_channel, link, next, dcc) {
-        red_destroy_surface_item(worker, dcc, surface_id);
+        dcc_push_destroy_surface(dcc, surface_id);
     }
 
     spice_warn_if(!ring_is_empty(&surface->depend_on_me));
