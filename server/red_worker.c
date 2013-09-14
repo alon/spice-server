@@ -332,7 +332,6 @@ typedef struct RedWorker {
 
     DisplayChannel *display_channel;
     uint32_t display_poll_tries;
-
     CursorChannel *cursor_channel;
     uint32_t cursor_poll_tries;
 
@@ -342,15 +341,8 @@ typedef struct RedWorker {
 
     uint32_t red_drawable_count;
     uint32_t glz_drawable_count;
-    uint32_t transparent_count;
-
-    uint32_t shadows_count;
-    uint32_t containers_count;
-
     uint32_t bits_unique;
-
     RedMemSlotInfo mem_slots;
-
     uint32_t preload_group_id;
 
     spice_image_compression_t image_compression;
@@ -359,13 +351,10 @@ typedef struct RedWorker {
 
     QuicData quic_data;
     QuicContext *quic;
-
     LzData lz_data;
     LzContext  *lz;
-
     JpegData jpeg_data;
     JpegEncoderContext *jpeg;
-
     ZlibData zlib_data;
     ZlibEncoder *zlib;
 
@@ -1052,7 +1041,7 @@ void display_channel_drawable_unref(DisplayChannel *display, Drawable *drawable)
     display->drawable_count--;
 }
 
-static inline void remove_shadow(RedWorker *worker, DrawItem *item)
+static void remove_shadow(DisplayChannel *display, DrawItem *item)
 {
     Shadow *shadow;
 
@@ -1065,13 +1054,11 @@ static inline void remove_shadow(RedWorker *worker, DrawItem *item)
     region_destroy(&shadow->base.rgn);
     region_destroy(&shadow->on_hold);
     free(shadow);
-    worker->shadows_count--;
 }
 
 static inline void current_remove_container(RedWorker *worker, Container *container)
 {
     spice_assert(ring_is_empty(&container->items));
-    worker->containers_count--;
     ring_remove(&container->base.siblings_link);
     region_destroy(&container->base.rgn);
     free(container);
@@ -1135,12 +1122,8 @@ static inline void current_remove_drawable(RedWorker *worker, Drawable *item)
 {
     DisplayChannel *display = worker->display_channel;
 
-    if (item->tree_item.effect != QXL_EFFECT_OPAQUE) {
-        worker->transparent_count--;
-    }
-
     display_stream_trace_add_drawable(display, item);
-    remove_shadow(worker, &item->tree_item);
+    remove_shadow(display, &item->tree_item);
     ring_remove(&item->tree_item.base.siblings_link);
     ring_remove(&item->list_link);
     ring_remove(&item->surface_list_link);
@@ -2593,7 +2576,7 @@ static void add_clip_rects(QRegion *rgn, SpiceClipRects *data)
     }
 }
 
-static inline int red_current_add_with_shadow(RedWorker *worker, Ring *ring, Drawable *item)
+static int red_current_add_with_shadow(RedWorker *worker, Ring *ring, Drawable *item)
 {
     DisplayChannel *display = worker->display_channel;
 #ifdef RED_WORKER_STAT
@@ -2612,7 +2595,6 @@ static inline int red_current_add_with_shadow(RedWorker *worker, Ring *ring, Dra
         stat_add(&worker->add_stat, start_time);
         return FALSE;
     }
-    worker->shadows_count++;
     // item and his shadow must initially be placed in the same container.
     // for now putting them on root.
 
@@ -3035,9 +3017,6 @@ static gboolean red_process_draw(RedWorker *worker, QXLCommandExt *ext_cmd)
     }
 
     if (red_add_drawable(worker, drawable)) {
-        if (drawable->tree_item.effect != QXL_EFFECT_OPAQUE) {
-            worker->transparent_count++;
-        }
         red_pipes_add_drawable(worker, drawable);
     }
 
