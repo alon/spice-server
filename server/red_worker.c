@@ -58,6 +58,7 @@
 #include "common/generated_server_marshallers.h"
 
 #include "display_channel.h"
+#include "stream.h"
 
 #include "spice.h"
 #include "red_worker.h"
@@ -79,21 +80,6 @@
 #define DISPLAY_CLIENT_RETRY_INTERVAL 10000 //micro
 
 #define DISPLAY_FREE_LIST_DEFAULT_SIZE 128
-
-#define RED_STREAM_DETACTION_MAX_DELTA ((1000 * 1000 * 1000) / 5) // 1/5 sec
-#define RED_STREAM_CONTINUS_MAX_DELTA (1000 * 1000 * 1000)
-#define RED_STREAM_TIMOUT (1000 * 1000 * 1000)
-#define RED_STREAM_FRAMES_START_CONDITION 20
-#define RED_STREAM_GRADUAL_FRAMES_START_CONDITION 0.2
-#define RED_STREAM_FRAMES_RESET_CONDITION 100
-#define RED_STREAM_MIN_SIZE (96 * 96)
-#define RED_STREAM_INPUT_FPS_TIMEOUT (5 * 1000) // 5 sec
-#define RED_STREAM_CHANNEL_CAPACITY 0.8
-/* the client's stream report frequency is the minimum of the 2 values below */
-#define RED_STREAM_CLIENT_REPORT_WINDOW 5 // #frames
-#define RED_STREAM_CLIENT_REPORT_TIMEOUT 1000 // milliseconds
-#define RED_STREAM_DEFAULT_HIGH_START_BIT_RATE (10 * 1024 * 1024) // 10Mbps
-#define RED_STREAM_DEFAULT_LOW_START_BIT_RATE (2.5 * 1024 * 1024) // 2.5Mbps
 
 #define FPS_TEST_INTERVAL 1
 #define MAX_FPS 30
@@ -243,11 +229,6 @@ typedef struct SurfaceDestroyItem {
     PipeItem pipe_item;
 } SurfaceDestroyItem;
 
-typedef struct StreamActivateReportItem {
-    PipeItem pipe_item;
-    uint32_t stream_id;
-} StreamActivateReportItem;
-
 #define MAX_PIPE_SIZE 50
 
 #define WIDE_CLIENT_ACK_WINDOW 40
@@ -267,20 +248,6 @@ typedef struct ImageItem {
     int can_lossy;
     uint8_t data[0];
 } ImageItem;
-
-enum {
-    STREAM_FRAME_NONE,
-    STREAM_FRAME_NATIVE,
-    STREAM_FRAME_CONTAINER,
-};
-
-typedef struct StreamClipItem {
-    PipeItem base;
-    int refs;
-    StreamAgent *stream_agent;
-    int clip_type;
-    SpiceClipRects *rects;
-} StreamClipItem;
 
 typedef struct {
     QuicUsrContext usr;
@@ -377,20 +344,6 @@ typedef struct RedSurface {
     QXLReleaseInfoExt create, destroy;
 } RedSurface;
 
-typedef struct ItemTrace {
-    red_time_t time;
-    int frames_count;
-    int gradual_frames_count;
-    int last_gradual_frame;
-    int width;
-    int height;
-    SpiceRect dest_area;
-} ItemTrace;
-
-#define TRACE_ITEMS_SHIFT 3
-#define NUM_TRACE_ITEMS (1 << TRACE_ITEMS_SHIFT)
-#define ITEMS_TRACE_MASK (NUM_TRACE_ITEMS - 1)
-
 #define NUM_DRAWABLES 1000
 #define NUM_CURSORS 100
 
@@ -422,7 +375,6 @@ typedef struct RedWorker {
 
     uint32_t shadows_count;
     uint32_t containers_count;
-    uint32_t stream_count;
 
     uint32_t bits_unique;
 
@@ -438,14 +390,6 @@ typedef struct RedWorker {
     spice_image_compression_t image_compression;
     spice_wan_compression_t jpeg_state;
     spice_wan_compression_t zlib_glz_state;
-
-    uint32_t streaming_video;
-    Stream streams_buf[NUM_STREAMS];
-    Stream *free_streams;
-    Ring streams;
-    ItemTrace items_trace[NUM_TRACE_ITEMS];
-    uint32_t next_item_trace;
-    uint64_t streams_size_total;
 
     QuicData quic_data;
     QuicContext *quic;
@@ -501,16 +445,12 @@ static void red_update_area(RedWorker *worker, const SpiceRect *area, int surfac
 static void red_update_area_till(RedWorker *worker, const SpiceRect *area, int surface_id,
                                  Drawable *last);
 static void red_worker_drawable_unref(RedWorker *worker, Drawable *drawable);
-static void red_display_release_stream(RedWorker *worker, StreamAgent *agent);
-static inline void red_detach_stream(RedWorker *worker, Stream *stream, int detach_sized);
-static void red_stop_stream(RedWorker *worker, Stream *stream);
-static inline void red_stream_maintenance(RedWorker *worker, Drawable *candidate, Drawable *sect);
+static inline void display_channel_stream_maintenance(DisplayChannel *display, Drawable *candidate, Drawable *sect);
 static inline void display_begin_send_message(RedChannelClient *rcc);
 static void red_release_glz(DisplayChannelClient *dcc);
 static void red_freeze_glz(DisplayChannelClient *dcc);
 static void display_channel_push_release(DisplayChannelClient *dcc, uint8_t type, uint64_t id,
                                          uint64_t* sync_data);
-static void red_display_release_stream_clip(RedWorker *worker, StreamClipItem *item);
 static int red_display_free_some_independent_glz_drawables(DisplayChannelClient *dcc);
 static void red_display_free_glz_drawable(DisplayChannelClient *dcc, RedGlzDrawable *drawable);
 static ImageItem *red_add_surface_area_image(DisplayChannelClient *dcc, int surface_id,
@@ -546,6 +486,137 @@ static void display_channel_client_release_item_after_push(DisplayChannelClient 
 #define DRAWABLE_FOREACH_GLZ_SAFE(drawable, link, next, glz) \
     SAFE_FOREACH(link, next, drawable, &(drawable)->glz_ring, glz, LINK_TO_GLZ(link))
 
+
+static int get_stream_id(DisplayChannel *display, Stream *stream)
+{
+    return (int)(stream - display->streams_buf);
+}
+
+static void display_stream_free(DisplayChannel *display, Stream *stream)
+{
+    if (stream->input_fps_timer) {
+        g_source_remove(stream->input_fps_timer);
+        stream->input_fps_timer = 0;
+    }
+    stream->next = display->free_streams;
+    display->free_streams = stream;
+}
+
+static void display_stream_unref(DisplayChannel *display, Stream *stream)
+{
+    if (--stream->refs)
+        return;
+
+    spice_warn_if_fail(!ring_item_is_linked(&stream->link));
+    display_stream_free(display, stream);
+    display->stream_count--;
+}
+
+static void display_stream_agent_unref(DisplayChannel *display, StreamAgent *agent)
+{
+    display_stream_unref(display, agent->stream);
+}
+
+static void display_stream_clip_unref(DisplayChannel *display, StreamClipItem *item)
+{
+    if (--item->refs)
+        return;
+
+    display_stream_agent_unref(display, item->stream_agent);
+    free(item->rects);
+    free(item);
+}
+
+static void dcc_push_stream_agent_clip(DisplayChannelClient* dcc, StreamAgent *agent)
+{
+    StreamClipItem *item = stream_clip_item_new(dcc, agent);
+    int n_rects;
+
+    item->clip_type = SPICE_CLIP_TYPE_RECTS;
+
+    n_rects = pixman_region32_n_rects(&agent->clip);
+    item->rects = spice_malloc_n_m(n_rects, sizeof(SpiceRect), sizeof(SpiceClipRects));
+    item->rects->num_rects = n_rects;
+    region_ret_rects(&agent->clip, item->rects->rects, n_rects);
+
+    red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), (PipeItem *)item);
+}
+
+
+void attach_stream(DisplayChannel *display, Drawable *drawable, Stream *stream)
+{
+    DisplayChannelClient *dcc;
+    RingItem *item, *next;
+
+    spice_assert(!drawable->stream && !stream->current);
+    spice_assert(drawable && stream);
+    stream->current = drawable;
+    drawable->stream = stream;
+    stream->last_time = drawable->creation_time;
+    stream->num_input_frames++;
+
+    FOREACH_DCC(display, item, next, dcc) {
+        StreamAgent *agent;
+        QRegion clip_in_draw_dest;
+
+        agent = &dcc->stream_agents[get_stream_id(display, stream)];
+        region_or(&agent->vis_region, &drawable->tree_item.base.rgn);
+
+        region_init(&clip_in_draw_dest);
+        region_add(&clip_in_draw_dest, &drawable->red_drawable->bbox);
+        region_and(&clip_in_draw_dest, &agent->clip);
+
+        if (!region_is_equal(&clip_in_draw_dest, &drawable->tree_item.base.rgn)) {
+            region_remove(&agent->clip, &drawable->red_drawable->bbox);
+            region_or(&agent->clip, &drawable->tree_item.base.rgn);
+            dcc_push_stream_agent_clip(dcc, agent);
+        }
+#ifdef STREAM_STATS
+        agent->stats.num_input_frames++;
+#endif
+    }
+}
+
+static void stop_stream(DisplayChannel *display, Stream *stream)
+{
+    DisplayChannelClient *dcc;
+    RingItem *item, *next;
+
+    spice_assert(ring_item_is_linked(&stream->link));
+    spice_assert(!stream->current);
+    spice_debug("stream %d", get_stream_id(display, stream));
+    FOREACH_DCC(display, item, next, dcc) {
+        StreamAgent *stream_agent;
+
+        stream_agent = &dcc->stream_agents[get_stream_id(display, stream)];
+        region_clear(&stream_agent->vis_region);
+        region_clear(&stream_agent->clip);
+        spice_assert(!pipe_item_is_linked(&stream_agent->destroy_item));
+        if (stream_agent->mjpeg_encoder && dcc->use_mjpeg_encoder_rate_control) {
+            uint64_t stream_bit_rate = mjpeg_encoder_get_bit_rate(stream_agent->mjpeg_encoder);
+
+            if (stream_bit_rate > dcc->streams_max_bit_rate) {
+                spice_debug("old max-bit-rate=%.2f new=%.2f",
+                dcc->streams_max_bit_rate / 8.0 / 1024.0 / 1024.0,
+                stream_bit_rate / 8.0 / 1024.0 / 1024.0);
+                dcc->streams_max_bit_rate = stream_bit_rate;
+            }
+        }
+        stream->refs++;
+        red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &stream_agent->destroy_item);
+        stream_agent_stats_print(stream_agent);
+    }
+    display->streams_size_total -= stream->width * stream->height;
+    ring_remove(&stream->link);
+    display_stream_unref(display, stream);
+}
+
+GMainContext* red_worker_get_context(RedWorker *worker)
+{
+    spice_return_val_if_fail(worker, NULL);
+
+    return worker->main_context;
+}
 
 /* fixme: move to display channel */
 DrawablePipeItem *drawable_pipe_item_new(DisplayChannelClient *dcc,
@@ -592,7 +663,7 @@ QXLInstance* red_worker_get_qxl(RedWorker *worker)
     return worker->qxl;
 }
 
-static inline int is_primary_surface(RedWorker *worker, uint32_t surface_id)
+static inline int is_primary_surface(DisplayChannel *display, uint32_t surface_id)
 {
     if (surface_id == 0) {
         return TRUE;
@@ -856,8 +927,6 @@ static void drawables_init(RedWorker *worker)
 }
 
 
-static void red_reset_stream_trace(RedWorker *worker);
-
 static SurfaceDestroyItem *get_surface_destroy_item(RedChannel *channel,
                                                     uint32_t surface_id)
 {
@@ -890,16 +959,36 @@ static inline void red_destroy_surface_item(RedWorker *worker,
     red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &destroy->pipe_item);
 }
 
+static void stop_streams(DisplayChannel *display)
+{
+    Ring *ring = &display->streams;
+    RingItem *item = ring_get_head(ring);
+
+    while (item) {
+        Stream *stream = SPICE_CONTAINEROF(item, Stream, link);
+        item = ring_next(ring, item);
+        if (!stream->current) {
+            stop_stream(display, stream);
+        } else {
+            spice_info("attached stream");
+        }
+    }
+
+    display->next_item_trace = 0;
+    memset(display->items_trace, 0, sizeof(display->items_trace));
+}
+
 static inline void red_destroy_surface(RedWorker *worker, uint32_t surface_id)
 {
+    DisplayChannel *display = worker->display_channel;
     RedSurface *surface = &worker->surfaces[surface_id];
     DisplayChannelClient *dcc;
     RingItem *link, *next;
 
     if (!--surface->refs) {
         // only primary surface streams are supported
-        if (is_primary_surface(worker, surface_id)) {
-            red_reset_stream_trace(worker);
+        if (is_primary_surface(worker->display_channel, surface_id)) {
+            stop_streams(display);
         }
         spice_assert(surface->context.canvas);
 
@@ -995,6 +1084,9 @@ static void remove_drawable_dependencies(RedWorker *worker, Drawable *drawable)
     }
 }
 
+static void detach_stream(DisplayChannel *display, Stream *stream,
+                          int detach_sized);
+
 static void red_worker_drawable_unref(RedWorker *worker, Drawable *drawable)
 {
     RingItem *item, *next;
@@ -1006,7 +1098,7 @@ static void red_worker_drawable_unref(RedWorker *worker, Drawable *drawable)
     spice_return_if_fail(ring_is_empty(&drawable->pipes));
 
     if (drawable->stream) {
-        red_detach_stream(worker, drawable->stream, TRUE);
+        detach_stream(worker->display_channel, drawable->stream, TRUE);
     }
     region_destroy(&drawable->tree_item.base.rgn);
 
@@ -1064,14 +1156,15 @@ static inline void container_cleanup(RedWorker *worker, Container *container)
     }
 }
 
-static inline void red_add_item_trace(RedWorker *worker, Drawable *item)
+static void display_stream_trace_add_drawable(DisplayChannel *display, Drawable *item)
 {
     ItemTrace *trace;
-    if (!item->streamable) {
+
+    if (!item->stream || !item->streamable) {
         return;
     }
 
-    trace = &worker->items_trace[worker->next_item_trace++ & ITEMS_TRACE_MASK];
+    trace = &display->items_trace[display->next_item_trace++ & ITEMS_TRACE_MASK];
     trace->time = item->creation_time;
     trace->frames_count = item->frames_count;
     trace->gradual_frames_count = item->gradual_frames_count;
@@ -1106,9 +1199,8 @@ static inline void current_remove_drawable(RedWorker *worker, Drawable *item)
     if (item->tree_item.effect != QXL_EFFECT_OPAQUE) {
         worker->transparent_count--;
     }
-    if (!item->stream) {
-        red_add_item_trace(worker, item);
-    }
+
+    display_stream_trace_add_drawable(worker->display_channel, item);
     remove_shadow(worker, &item->tree_item);
     ring_remove(&item->tree_item.base.siblings_link);
     ring_remove(&item->list_link);
@@ -1338,7 +1430,7 @@ static inline void __exclude_region(RedWorker *worker, Ring *ring, TreeItem *ite
             } else {
                 if (frame_candidate) {
                     Drawable *drawable = SPICE_CONTAINEROF(draw, Drawable, tree_item);
-                    red_stream_maintenance(worker, frame_candidate, drawable);
+                    display_channel_stream_maintenance(worker->display_channel, frame_candidate, drawable);
                 }
                 region_exclude(&draw->base.rgn, &and_rgn);
             }
@@ -1528,26 +1620,8 @@ static int is_same_drawable(RedWorker *worker, Drawable *d1, Drawable *d2)
     }
 }
 
-static inline void red_free_stream(RedWorker *worker, Stream *stream)
-{
-    if (stream->input_fps_timer) {
-        g_source_remove(stream->input_fps_timer);
-        stream->input_fps_timer = 0;
-    }
-    stream->next = worker->free_streams;
-    worker->free_streams = stream;
-}
-
-static void red_release_stream(RedWorker *worker, Stream *stream)
-{
-    if (!--stream->refs) {
-        spice_assert(!ring_item_is_linked(&stream->link));
-        red_free_stream(worker, stream);
-        worker->stream_count--;
-    }
-}
-
-static inline void red_detach_stream(RedWorker *worker, Stream *stream, int detach_sized)
+static void detach_stream(DisplayChannel *display, Stream *stream,
+                          int detach_sized)
 {
     spice_assert(stream->current && stream->current->stream);
     spice_assert(stream->current->stream == stream);
@@ -1556,154 +1630,6 @@ static inline void red_detach_stream(RedWorker *worker, Stream *stream, int deta
         stream->current->sized_stream = NULL;
     }
     stream->current = NULL;
-}
-
-static StreamClipItem *__new_stream_clip(DisplayChannelClient* dcc, StreamAgent *agent)
-{
-    StreamClipItem *item = spice_new(StreamClipItem, 1);
-    red_channel_pipe_item_init(RED_CHANNEL_CLIENT(dcc)->channel,
-                    (PipeItem *)item, PIPE_ITEM_TYPE_STREAM_CLIP);
-
-    item->stream_agent = agent;
-    agent->stream->refs++;
-    item->refs = 1;
-    return item;
-}
-
-static void push_stream_clip(DisplayChannelClient* dcc, StreamAgent *agent)
-{
-    StreamClipItem *item = __new_stream_clip(dcc, agent);
-    int n_rects;
-
-    if (!item) {
-        spice_critical("alloc failed");
-    }
-    item->clip_type = SPICE_CLIP_TYPE_RECTS;
-
-    n_rects = pixman_region32_n_rects(&agent->clip);
-
-    item->rects = spice_malloc_n_m(n_rects, sizeof(SpiceRect), sizeof(SpiceClipRects));
-    item->rects->num_rects = n_rects;
-    region_ret_rects(&agent->clip, item->rects->rects, n_rects);
-    red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), (PipeItem *)item);
-}
-
-static void red_display_release_stream_clip(RedWorker *worker, StreamClipItem *item)
-{
-    if (!--item->refs) {
-        red_display_release_stream(worker, item->stream_agent);
-        free(item->rects);
-        free(item);
-    }
-}
-
-static inline int get_stream_id(RedWorker *worker, Stream *stream)
-{
-    return (int)(stream - worker->streams_buf);
-}
-
-static void red_attach_stream(RedWorker *worker, Drawable *drawable, Stream *stream)
-{
-    DisplayChannelClient *dcc;
-    RingItem *item, *next;
-
-    spice_assert(!drawable->stream && !stream->current);
-    spice_assert(drawable && stream);
-    stream->current = drawable;
-    drawable->stream = stream;
-    stream->last_time = drawable->creation_time;
-    stream->num_input_frames++;
-
-    FOREACH_DCC(worker->display_channel, item, next, dcc) {
-        StreamAgent *agent;
-        QRegion clip_in_draw_dest;
-
-        agent = &dcc->stream_agents[get_stream_id(worker, stream)];
-        region_or(&agent->vis_region, &drawable->tree_item.base.rgn);
-
-        region_init(&clip_in_draw_dest);
-        region_add(&clip_in_draw_dest, &drawable->red_drawable->bbox);
-        region_and(&clip_in_draw_dest, &agent->clip);
-
-        if (!region_is_equal(&clip_in_draw_dest, &drawable->tree_item.base.rgn)) {
-            region_remove(&agent->clip, &drawable->red_drawable->bbox);
-            region_or(&agent->clip, &drawable->tree_item.base.rgn);
-            push_stream_clip(dcc, agent);
-        }
-#ifdef STREAM_STATS
-        agent->stats.num_input_frames++;
-#endif
-    }
-}
-
-static void red_print_stream_stats(DisplayChannelClient *dcc, StreamAgent *agent)
-{
-#ifdef STREAM_STATS
-    StreamStats *stats = &agent->stats;
-    double passed_mm_time = (stats->end - stats->start) / 1000.0;
-    MJpegEncoderStats encoder_stats = {0};
-
-    if (agent->mjpeg_encoder) {
-        mjpeg_encoder_get_stats(agent->mjpeg_encoder, &encoder_stats);
-    }
-
-    spice_debug("stream=%ld dim=(%dx%d) #in-frames=%lu #in-avg-fps=%.2f #out-frames=%lu "
-                "out/in=%.2f #drops=%lu (#pipe=%lu #fps=%lu) out-avg-fps=%.2f "
-                "passed-mm-time(sec)=%.2f size-total(MB)=%.2f size-per-sec(Mbps)=%.2f "
-                "size-per-frame(KBpf)=%.2f avg-quality=%.2f "
-                "start-bit-rate(Mbps)=%.2f end-bit-rate(Mbps)=%.2f",
-                agent - dcc->stream_agents, agent->stream->width, agent->stream->height,
-                stats->num_input_frames,
-                stats->num_input_frames / passed_mm_time,
-                stats->num_frames_sent,
-                (stats->num_frames_sent + 0.0) / stats->num_input_frames,
-                stats->num_drops_pipe +
-                stats->num_drops_fps,
-                stats->num_drops_pipe,
-                stats->num_drops_fps,
-                stats->num_frames_sent / passed_mm_time,
-                passed_mm_time,
-                stats->size_sent / 1024.0 / 1024.0,
-                ((stats->size_sent * 8.0) / (1024.0 * 1024)) / passed_mm_time,
-                stats->size_sent / 1000.0 / stats->num_frames_sent,
-                encoder_stats.avg_quality,
-                encoder_stats.starting_bit_rate / (1024.0 * 1024),
-                encoder_stats.cur_bit_rate / (1024.0 * 1024));
-#endif
-}
-
-static void red_stop_stream(RedWorker *worker, Stream *stream)
-{
-    DisplayChannelClient *dcc;
-    RingItem *item, *next;
-
-    spice_assert(ring_item_is_linked(&stream->link));
-    spice_assert(!stream->current);
-    spice_debug("stream %d", get_stream_id(worker, stream));
-    FOREACH_DCC(worker->display_channel, item, next, dcc) {
-        StreamAgent *stream_agent;
-
-        stream_agent = &dcc->stream_agents[get_stream_id(worker, stream)];
-        region_clear(&stream_agent->vis_region);
-        region_clear(&stream_agent->clip);
-        spice_assert(!pipe_item_is_linked(&stream_agent->destroy_item));
-        if (stream_agent->mjpeg_encoder && dcc->use_mjpeg_encoder_rate_control) {
-            uint64_t stream_bit_rate = mjpeg_encoder_get_bit_rate(stream_agent->mjpeg_encoder);
-
-            if (stream_bit_rate > dcc->streams_max_bit_rate) {
-                spice_debug("old max-bit-rate=%.2f new=%.2f",
-                dcc->streams_max_bit_rate / 8.0 / 1024.0 / 1024.0,
-                stream_bit_rate / 8.0 / 1024.0 / 1024.0);
-                dcc->streams_max_bit_rate = stream_bit_rate;
-            }
-        }
-        stream->refs++;
-        red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &stream_agent->destroy_item);
-        red_print_stream_stats(dcc, stream_agent);
-    }
-    worker->streams_size_total -= stream->width * stream->height;
-    ring_remove(&stream->link);
-    red_release_stream(worker, stream);
 }
 
 static int red_display_drawable_is_in_pipe(DisplayChannelClient *dcc, Drawable *drawable)
@@ -1722,18 +1648,19 @@ static int red_display_drawable_is_in_pipe(DisplayChannelClient *dcc, Drawable *
 
 /*
  * after red_display_detach_stream_gracefully is called for all the display channel clients,
- * red_detach_stream should be called. See comment (1).
+ * detach_stream should be called. See comment (1).
  */
-static inline void red_display_detach_stream_gracefully(DisplayChannelClient *dcc,
-                                                        Stream *stream,
-                                                        Drawable *update_area_limit)
+static void dcc_detach_stream_gracefully(DisplayChannelClient *dcc,
+                                         Stream *stream,
+                                         Drawable *update_area_limit)
 {
-    int stream_id = get_stream_id(DCC_TO_WORKER(dcc), stream);
+    DisplayChannel *display = DCC_TO_DC(dcc);
+    int stream_id = get_stream_id(display, stream);
     StreamAgent *agent = &dcc->stream_agents[stream_id];
 
     /* stopping the client from playing older frames at once*/
     region_clear(&agent->clip);
-    push_stream_clip(dcc, agent);
+    dcc_push_stream_agent_clip(dcc, agent);
 
     if (region_is_empty(&agent->vis_region)) {
         spice_debug("stream %d: vis region empty", stream_id);
@@ -1791,17 +1718,17 @@ clear_vis_region:
     region_clear(&agent->vis_region);
 }
 
-static inline void red_detach_stream_gracefully(RedWorker *worker, Stream *stream,
-                                                Drawable *update_area_limit)
+static void detach_stream_gracefully(DisplayChannel *display, Stream *stream,
+                                     Drawable *update_area_limit)
 {
     RingItem *item, *next;
     DisplayChannelClient *dcc;
 
-    FOREACH_DCC(worker->display_channel, item, next, dcc) {
-        red_display_detach_stream_gracefully(dcc, stream, update_area_limit);
+    FOREACH_DCC(display, item, next, dcc) {
+        dcc_detach_stream_gracefully(dcc, stream, update_area_limit);
     }
     if (stream->current) {
-        red_detach_stream(worker, stream, TRUE);
+        detach_stream(display, stream, TRUE);
     }
 }
 
@@ -1815,55 +1742,55 @@ static inline void red_detach_stream_gracefully(RedWorker *worker, Stream *strea
  *           involves sending an upgrade image to the client, this drawable won't be rendered
  *           (see red_display_detach_stream_gracefully).
  */
-static void red_detach_streams_behind(RedWorker *worker, QRegion *region, Drawable *drawable)
+static void detach_streams_behind(DisplayChannel *display, QRegion *region, Drawable *drawable)
 {
-    Ring *ring = &worker->streams;
+    Ring *ring = &display->streams;
     RingItem *item = ring_get_head(ring);
     RingItem *dcc_ring_item, *next;
     DisplayChannelClient *dcc;
-    int has_clients = display_is_connected(worker);
+    bool is_connected = red_channel_is_connected(RED_CHANNEL(display));
 
     while (item) {
         Stream *stream = SPICE_CONTAINEROF(item, Stream, link);
-        int detach_stream = 0;
+        int detach = 0;
         item = ring_next(ring, item);
 
-        FOREACH_DCC(worker->display_channel, dcc_ring_item, next, dcc) {
-            StreamAgent *agent = &dcc->stream_agents[get_stream_id(worker, stream)];
+        FOREACH_DCC(display, dcc_ring_item, next, dcc) {
+            StreamAgent *agent = &dcc->stream_agents[get_stream_id(display, stream)];
 
             if (region_intersects(&agent->vis_region, region)) {
-                red_display_detach_stream_gracefully(dcc, stream, drawable);
-                detach_stream = 1;
-                spice_debug("stream %d", get_stream_id(worker, stream));
+                dcc_detach_stream_gracefully(dcc, stream, drawable);
+                detach = 1;
+                spice_debug("stream %d", get_stream_id(display, stream));
             }
         }
-        if (detach_stream && stream->current) {
-            red_detach_stream(worker, stream, TRUE);
-        } else if (!has_clients) {
+        if (detach && stream->current) {
+            detach_stream(display, stream, TRUE);
+        } else if (!is_connected) {
             if (stream->current &&
                 region_intersects(&stream->current->tree_item.base.rgn, region)) {
-                red_detach_stream(worker, stream, TRUE);
+                detach_stream(display, stream, TRUE);
             }
         }
     }
 }
 
-static void red_streams_update_visible_region(RedWorker *worker, Drawable *drawable)
+static void streams_update_visible_region(DisplayChannel *display, Drawable *drawable)
 {
     Ring *ring;
     RingItem *item;
     RingItem *dcc_ring_item, *next;
     DisplayChannelClient *dcc;
 
-    if (!display_is_connected(worker)) {
+    if (!red_channel_is_connected(RED_CHANNEL(display))) {
         return;
     }
 
-    if (!is_primary_surface(worker, drawable->surface_id)) {
+    if (!is_primary_surface(display, drawable->surface_id)) {
         return;
     }
 
-    ring = &worker->streams;
+    ring = &display->streams;
     item = ring_get_head(ring);
 
     while (item) {
@@ -1876,70 +1803,26 @@ static void red_streams_update_visible_region(RedWorker *worker, Drawable *drawa
             continue;
         }
 
-        FOREACH_DCC(worker->display_channel, dcc_ring_item, next, dcc) {
-            agent = &dcc->stream_agents[get_stream_id(worker, stream)];
+        FOREACH_DCC(display, dcc_ring_item, next, dcc) {
+            agent = &dcc->stream_agents[get_stream_id(display, stream)];
 
             if (region_intersects(&agent->vis_region, &drawable->tree_item.base.rgn)) {
                 region_exclude(&agent->vis_region, &drawable->tree_item.base.rgn);
                 region_exclude(&agent->clip, &drawable->tree_item.base.rgn);
-                push_stream_clip(dcc, agent);
+                dcc_push_stream_agent_clip(dcc, agent);
             }
         }
     }
 }
 
-static inline unsigned int red_get_streams_timout(RedWorker *worker)
-{
-    unsigned int timout = -1;
-    Ring *ring = &worker->streams;
-    RingItem *item = ring;
-
-    red_time_t now = red_get_monotonic_time();
-    while ((item = ring_next(ring, item))) {
-        Stream *stream;
-
-        stream = SPICE_CONTAINEROF(item, Stream, link);
-        red_time_t delta = (stream->last_time + RED_STREAM_TIMOUT) - now;
-
-        if (delta < 1000 * 1000) {
-            return 0;
-        }
-        timout = MIN(timout, (unsigned int)(delta / (1000 * 1000)));
-    }
-    return timout;
-}
-
-static inline void red_handle_streams_timout(RedWorker *worker)
-{
-    Ring *ring = &worker->streams;
-    RingItem *item;
-
-    red_time_t now = red_get_monotonic_time();
-    item = ring_get_head(ring);
-    while (item) {
-        Stream *stream = SPICE_CONTAINEROF(item, Stream, link);
-        item = ring_next(ring, item);
-        if (now >= (stream->last_time + RED_STREAM_TIMOUT)) {
-            red_detach_stream_gracefully(worker, stream, NULL);
-            red_stop_stream(worker, stream);
-        }
-    }
-}
-
-static void red_display_release_stream(RedWorker *worker, StreamAgent *agent)
-{
-    spice_assert(agent->stream);
-    red_release_stream(worker, agent->stream);
-}
-
-static inline Stream *red_alloc_stream(RedWorker *worker)
+static Stream *display_channel_stream_try_new(DisplayChannel *display)
 {
     Stream *stream;
-    if (!worker->free_streams) {
+    if (!display->free_streams) {
         return NULL;
     }
-    stream = worker->free_streams;
-    worker->free_streams = worker->free_streams->next;
+    stream = display->free_streams;
+    display->free_streams = display->free_streams->next;
     return stream;
 }
 
@@ -1988,7 +1871,7 @@ static uint64_t red_stream_get_initial_bit_rate(DisplayChannelClient *dcc,
     /* dividing the available bandwidth among the active streams, and saving
      * (1-RED_STREAM_CHANNEL_CAPACITY) of it for other messages */
     return (RED_STREAM_CHANNEL_CAPACITY * bit_rate *
-            stream->width * stream->height) / DCC_TO_WORKER(dcc)->streams_size_total;
+            stream->width * stream->height) / DCC_TO_DC(dcc)->streams_size_total;
 }
 
 static uint32_t red_stream_mjpeg_encoder_get_roundtrip(void *opaque)
@@ -2030,7 +1913,7 @@ static void red_display_update_streams_max_latency(DisplayChannelClient *dcc, St
     }
 
     dcc->streams_max_latency = 0;
-    if (DCC_TO_WORKER(dcc)->stream_count == 1) {
+    if (DCC_TO_DC(dcc)->stream_count == 1) {
         return;
     }
     for (i = 0; i < NUM_STREAMS; i++) {
@@ -2069,9 +1952,9 @@ static void red_stream_update_client_playback_latency(void *opaque, uint32_t del
     main_dispatcher_set_mm_time_latency(RED_CHANNEL_CLIENT(agent->dcc)->client, agent->dcc->streams_max_latency);
 }
 
-static void red_display_create_stream(DisplayChannelClient *dcc, Stream *stream)
+static void dcc_create_stream(DisplayChannelClient *dcc, Stream *stream)
 {
-    StreamAgent *agent = &dcc->stream_agents[get_stream_id(DCC_TO_WORKER(dcc), stream)];
+    StreamAgent *agent = &dcc->stream_agents[get_stream_id(DCC_TO_DC(dcc), stream)];
 
     stream->refs++;
     spice_assert(region_is_empty(&agent->vis_region));
@@ -2107,7 +1990,7 @@ static void red_display_create_stream(DisplayChannelClient *dcc, Stream *stream)
         agent->report_id = rand();
         red_channel_pipe_item_init(RED_CHANNEL_CLIENT(dcc)->channel, &report_pipe_item->pipe_item,
                                    PIPE_ITEM_TYPE_STREAM_ACTIVATE_REPORT);
-        report_pipe_item->stream_id = get_stream_id(DCC_TO_WORKER(dcc), stream);
+        report_pipe_item->stream_id = get_stream_id(DCC_TO_DC(dcc), stream);
         red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &report_pipe_item->pipe_item);
     }
 #ifdef STREAM_STATS
@@ -2136,7 +2019,7 @@ static gboolean red_stream_input_fps_timer_cb(void *opaque)
     return TRUE;
 }
 
-static void red_create_stream(RedWorker *worker, Drawable *drawable)
+static void display_channel_create_stream(DisplayChannel *display, Drawable *drawable)
 {
     DisplayChannelClient *dcc;
     RingItem *dcc_ring_item, *next;
@@ -2145,14 +2028,14 @@ static void red_create_stream(RedWorker *worker, Drawable *drawable)
 
     spice_assert(!drawable->stream);
 
-    if (!(stream = red_alloc_stream(worker))) {
+    if (!(stream = display_channel_stream_try_new(display))) {
         return;
     }
 
     spice_assert(drawable->red_drawable->type == QXL_DRAW_COPY);
     src_rect = &drawable->red_drawable->u.copy.src_area;
 
-    ring_add(&worker->streams, &stream->link);
+    ring_add(&display->streams, &stream->link);
     stream->current = drawable;
     stream->last_time = drawable->creation_time;
     stream->width = src_rect->right - src_rect->left;
@@ -2165,43 +2048,45 @@ static void red_create_stream(RedWorker *worker, Drawable *drawable)
 
     GSource *source = g_timeout_source_new(RED_STREAM_INPUT_FPS_TIMEOUT);
     g_source_set_callback(source, red_stream_input_fps_timer_cb, stream, NULL);
-    stream->input_fps_timer = g_source_attach(source, worker->main_context);
+    stream->input_fps_timer =
+        g_source_attach(source, red_worker_get_context(COMMON_CHANNEL(display)->worker));
     g_source_unref(source);
 
     stream->num_input_frames = 0;
     stream->input_fps_timer_start = red_get_monotonic_time();
     stream->input_fps = MAX_FPS;
-    worker->streams_size_total += stream->width * stream->height;
-    worker->stream_count++;
-    FOREACH_DCC(worker->display_channel, dcc_ring_item, next, dcc) {
-        red_display_create_stream(dcc, stream);
+    display->streams_size_total += stream->width * stream->height;
+    display->stream_count++;
+    FOREACH_DCC(display, dcc_ring_item, next, dcc) {
+        dcc_create_stream(dcc, stream);
     }
-    spice_debug("stream %d %dx%d (%d, %d) (%d, %d)", (int)(stream - worker->streams_buf), stream->width,
+    spice_debug("stream %d %dx%d (%d, %d) (%d, %d)",
+                (int)(stream - display->streams_buf), stream->width,
                 stream->height, stream->dest_area.left, stream->dest_area.top,
                 stream->dest_area.right, stream->dest_area.bottom);
     return;
 }
 
-static void red_disply_start_streams(DisplayChannelClient *dcc)
+static void dcc_create_all_streams(DisplayChannelClient *dcc)
 {
-    Ring *ring = &DCC_TO_WORKER(dcc)->streams;
+    Ring *ring = &DCC_TO_DC(dcc)->streams;
     RingItem *item = ring;
 
     while ((item = ring_next(ring, item))) {
         Stream *stream = SPICE_CONTAINEROF(item, Stream, link);
-        red_display_create_stream(dcc, stream);
+        dcc_create_stream(dcc, stream);
     }
 }
 
-static void red_display_client_init_streams(DisplayChannelClient *dcc)
+static void dcc_init_stream_agents(DisplayChannelClient *dcc)
 {
     int i;
-    RedWorker *worker = DCC_TO_WORKER(dcc);
+    DisplayChannel *display = DCC_TO_DC(dcc);
     RedChannel *channel = RED_CHANNEL_CLIENT(dcc)->channel;
 
     for (i = 0; i < NUM_STREAMS; i++) {
         StreamAgent *agent = &dcc->stream_agents[i];
-        agent->stream = &worker->streams_buf[i];
+        agent->stream = &display->streams_buf[i];
         region_init(&agent->vis_region);
         region_init(&agent->clip);
         red_channel_pipe_item_init(channel, &agent->create_item, PIPE_ITEM_TYPE_STREAM_CREATE);
@@ -2211,7 +2096,7 @@ static void red_display_client_init_streams(DisplayChannelClient *dcc)
         red_channel_client_test_remote_cap(RED_CHANNEL_CLIENT(dcc), SPICE_DISPLAY_CAP_STREAM_REPORT);
 }
 
-static void red_display_destroy_streams_agents(DisplayChannelClient *dcc)
+static void dcc_destroy_stream_agents(DisplayChannelClient *dcc)
 {
     int i;
 
@@ -2226,27 +2111,14 @@ static void red_display_destroy_streams_agents(DisplayChannelClient *dcc)
     }
 }
 
-static void red_init_streams(RedWorker *worker)
-{
-    int i;
-
-    ring_init(&worker->streams);
-    worker->free_streams = NULL;
-    for (i = 0; i < NUM_STREAMS; i++) {
-        Stream *stream = &worker->streams_buf[i];
-        ring_item_init(&stream->link);
-        red_free_stream(worker, stream);
-    }
-}
-
-static inline int __red_is_next_stream_frame(RedWorker *worker,
-                                             const Drawable *candidate,
-                                             const int other_src_width,
-                                             const int other_src_height,
-                                             const SpiceRect *other_dest,
-                                             const red_time_t other_time,
-                                             const Stream *stream,
-                                             int container_candidate_allowed)
+static int is_next_stream_frame(DisplayChannel *display,
+                                const Drawable *candidate,
+                                const int other_src_width,
+                                const int other_src_height,
+                                const SpiceRect *other_dest,
+                                const red_time_t other_time,
+                                const Stream *stream,
+                                int container_candidate_allowed)
 {
     RedDrawable *red_drawable;
     int is_frame_container = FALSE;
@@ -2309,22 +2181,8 @@ static inline int __red_is_next_stream_frame(RedWorker *worker,
     }
 }
 
-static inline int red_is_next_stream_frame(RedWorker *worker, const Drawable *candidate,
-                                           const Drawable *prev)
-{
-    if (!candidate->streamable) {
-        return FALSE;
-    }
-
-    SpiceRect* prev_src = &prev->red_drawable->u.copy.src_area;
-    return __red_is_next_stream_frame(worker, candidate, prev_src->right - prev_src->left,
-                                      prev_src->bottom - prev_src->top,
-                                      &prev->red_drawable->bbox, prev->creation_time,
-                                      prev->stream,
-                                      FALSE);
-}
-
-static inline void pre_stream_item_swap(RedWorker *worker, Stream *stream, Drawable *new_frame)
+static void before_reattach_stream(DisplayChannel *display,
+                                   Stream *stream, Drawable *new_frame)
 {
     DrawablePipeItem *dpi;
     DisplayChannelClient *dcc;
@@ -2332,9 +2190,9 @@ static inline void pre_stream_item_swap(RedWorker *worker, Stream *stream, Drawa
     StreamAgent *agent;
     RingItem *ring_item, *next;
 
-    spice_assert(stream->current);
+    spice_return_if_fail(stream->current);
 
-    if (!display_is_connected(worker)) {
+    if (!red_channel_is_connected(RED_CHANNEL(display))) {
         return;
     }
 
@@ -2343,7 +2201,7 @@ static inline void pre_stream_item_swap(RedWorker *worker, Stream *stream, Drawa
         return;
     }
 
-    index = get_stream_id(worker, stream);
+    index = get_stream_id(display, stream);
     DRAWABLE_FOREACH_DPI_SAFE(stream->current, ring_item, next, dpi) {
         dcc = dpi->dcc;
         agent = &dcc->stream_agents[index];
@@ -2366,7 +2224,7 @@ static inline void pre_stream_item_swap(RedWorker *worker, Stream *stream, Drawa
     }
 
 
-    FOREACH_DCC(worker->display_channel, ring_item, next, dcc) {
+    FOREACH_DCC(display, ring_item, next, dcc) {
         double drop_factor;
 
         agent = &dcc->stream_agents[index];
@@ -2397,12 +2255,13 @@ static inline void pre_stream_item_swap(RedWorker *worker, Stream *stream, Drawa
     }
 }
 
-static inline void red_update_copy_graduality(RedWorker* worker, Drawable *drawable)
+static void update_copy_graduality(Drawable *drawable)
 {
     SpiceBitmap *bitmap;
-    spice_assert(drawable->red_drawable->type == QXL_DRAW_COPY);
+    spice_return_if_fail(drawable->red_drawable->type == QXL_DRAW_COPY);
 
-    if (worker->streaming_video != STREAM_VIDEO_FILTER) {
+    /* TODO: global property -> per dc/dcc */
+    if (streaming_video != STREAM_VIDEO_FILTER) {
         drawable->copy_bitmap_graduality = BITMAP_GRADUAL_INVALID;
         return;
     }
@@ -2421,7 +2280,7 @@ static inline void red_update_copy_graduality(RedWorker* worker, Drawable *drawa
     }
 }
 
-static inline int red_is_stream_start(Drawable *drawable)
+static int is_stream_start(Drawable *drawable)
 {
     return ((drawable->frames_count >= RED_STREAM_FRAMES_START_CONDITION) &&
             (drawable->gradual_frames_count >=
@@ -2429,13 +2288,13 @@ static inline int red_is_stream_start(Drawable *drawable)
 }
 
 // returns whether a stream was created
-static int red_stream_add_frame(RedWorker *worker,
-                                Drawable *frame_drawable,
-                                int frames_count,
-                                int gradual_frames_count,
-                                int last_gradual_frame)
+static int display_channel_stream_add_frame(DisplayChannel *display,
+                                            Drawable *frame_drawable,
+                                            int frames_count,
+                                            int gradual_frames_count,
+                                            int last_gradual_frame)
 {
-    red_update_copy_graduality(worker, frame_drawable);
+    update_copy_graduality(frame_drawable);
     frame_drawable->frames_count = frames_count + 1;
     frame_drawable->gradual_frames_count  = gradual_frames_count;
 
@@ -2453,45 +2312,52 @@ static int red_stream_add_frame(RedWorker *worker,
         frame_drawable->last_gradual_frame = last_gradual_frame;
     }
 
-    if (red_is_stream_start(frame_drawable)) {
-        red_create_stream(worker, frame_drawable);
+    if (is_stream_start(frame_drawable)) {
+        display_channel_create_stream(display, frame_drawable);
         return TRUE;
     }
     return FALSE;
 }
 
-static inline void red_stream_maintenance(RedWorker *worker, Drawable *candidate, Drawable *prev)
+static void display_channel_stream_maintenance(DisplayChannel *display,
+                                               Drawable *candidate, Drawable *prev)
 {
-    Stream *stream;
+    int is_next_frame;
 
     if (candidate->stream) {
         return;
     }
 
-    if ((stream = prev->stream)) {
-        int is_next_frame = __red_is_next_stream_frame(worker,
-                                                       candidate,
-                                                       stream->width,
-                                                       stream->height,
-                                                       &stream->dest_area,
-                                                       stream->last_time,
-                                                       stream,
-                                                       TRUE);
+    if (prev->stream) {
+        Stream *stream = prev->stream;
+
+        is_next_frame = is_next_stream_frame(display, candidate,
+                                             stream->width, stream->height,
+                                             &stream->dest_area, stream->last_time,
+                                             stream, TRUE);
         if (is_next_frame != STREAM_FRAME_NONE) {
-            pre_stream_item_swap(worker, stream, candidate);
-            red_detach_stream(worker, stream, FALSE);
+            before_reattach_stream(display, stream, candidate);
+            detach_stream(display, stream, FALSE);
             prev->streamable = FALSE; //prevent item trace
-            red_attach_stream(worker, candidate, stream);
+            attach_stream(display, candidate, stream);
             if (is_next_frame == STREAM_FRAME_CONTAINER) {
                 candidate->sized_stream = stream;
             }
         }
-    } else {
-        if (red_is_next_stream_frame(worker, candidate, prev) != STREAM_FRAME_NONE) {
-            red_stream_add_frame(worker, candidate,
-                                 prev->frames_count,
-                                 prev->gradual_frames_count,
-                                 prev->last_gradual_frame);
+    } else if (candidate->streamable) {
+        SpiceRect* prev_src = &prev->red_drawable->u.copy.src_area;
+
+        is_next_frame =
+            is_next_stream_frame(display, candidate, prev_src->right - prev_src->left,
+                                 prev_src->bottom - prev_src->top,
+                                 &prev->red_drawable->bbox, prev->creation_time,
+                                 prev->stream,
+                                 FALSE);
+        if (is_next_frame != STREAM_FRAME_NONE) {
+            display_channel_stream_add_frame(display, candidate,
+                                             prev->frames_count,
+                                             prev->gradual_frames_count,
+                                             prev->last_gradual_frame);
         }
     }
 }
@@ -2529,7 +2395,7 @@ static inline int red_current_add_equal(RedWorker *worker, DrawItem *item, TreeI
     if (item->effect == QXL_EFFECT_OPAQUE) {
         int add_after = !!other_drawable->stream &&
                         is_drawable_independent_from_surfaces(drawable);
-        red_stream_maintenance(worker, drawable, other_drawable);
+        display_channel_stream_maintenance(worker->display_channel, drawable, other_drawable);
         __current_add_drawable(worker, drawable, &other->siblings_link);
         other_drawable->refs++;
         current_remove_drawable(worker, other_drawable);
@@ -2603,79 +2469,59 @@ static inline int red_current_add_equal(RedWorker *worker, DrawItem *item, TreeI
     return FALSE;
 }
 
-static inline void red_use_stream_trace(RedWorker *worker, Drawable *drawable)
+#define FOREACH_STREAMS(display, item)                  \
+    for (item = ring_get_head(&(display)->streams);     \
+         item != NULL;                                  \
+         item = ring_next(&(display)->streams, item))
+
+static void red_use_stream_trace(DisplayChannel *display, Drawable *drawable)
 {
     ItemTrace *trace;
     ItemTrace *trace_end;
-    Ring *ring;
     RingItem *item;
 
     if (drawable->stream || !drawable->streamable || drawable->frames_count) {
         return;
     }
 
-
-    ring = &worker->streams;
-    item = ring_get_head(ring);
-
-    while (item) {
+    FOREACH_STREAMS(display, item) {
         Stream *stream = SPICE_CONTAINEROF(item, Stream, link);
-        int is_next_frame = __red_is_next_stream_frame(worker,
-                                                       drawable,
-                                                       stream->width,
-                                                       stream->height,
-                                                       &stream->dest_area,
-                                                       stream->last_time,
-                                                       stream,
-                                                       TRUE);
+        int is_next_frame = is_next_stream_frame(display,
+                                                 drawable,
+                                                 stream->width,
+                                                 stream->height,
+                                                 &stream->dest_area,
+                                                 stream->last_time,
+                                                 stream,
+                                                 TRUE);
         if (is_next_frame != STREAM_FRAME_NONE) {
             if (stream->current) {
                 stream->current->streamable = FALSE; //prevent item trace
-                pre_stream_item_swap(worker, stream, drawable);
-                red_detach_stream(worker, stream, FALSE);
+                before_reattach_stream(display, stream, drawable);
+                detach_stream(display, stream, FALSE);
             }
-            red_attach_stream(worker, drawable, stream);
+            attach_stream(display, drawable, stream);
             if (is_next_frame == STREAM_FRAME_CONTAINER) {
                 drawable->sized_stream = stream;
             }
             return;
         }
-        item = ring_next(ring, item);
     }
 
-    trace = worker->items_trace;
+    trace = display->items_trace;
     trace_end = trace + NUM_TRACE_ITEMS;
     for (; trace < trace_end; trace++) {
-        if (__red_is_next_stream_frame(worker, drawable, trace->width, trace->height,
+        if (is_next_stream_frame(display, drawable, trace->width, trace->height,
                                        &trace->dest_area, trace->time, NULL, FALSE) !=
                                        STREAM_FRAME_NONE) {
-            if (red_stream_add_frame(worker, drawable,
-                                     trace->frames_count,
-                                     trace->gradual_frames_count,
-                                     trace->last_gradual_frame)) {
+            if (display_channel_stream_add_frame(display, drawable,
+                                                 trace->frames_count,
+                                                 trace->gradual_frames_count,
+                                                 trace->last_gradual_frame)) {
                 return;
             }
         }
     }
-}
-
-static void red_reset_stream_trace(RedWorker *worker)
-{
-    Ring *ring = &worker->streams;
-    RingItem *item = ring_get_head(ring);
-
-    while (item) {
-        Stream *stream = SPICE_CONTAINEROF(item, Stream, link);
-        item = ring_next(ring, item);
-        if (!stream->current) {
-            red_stop_stream(worker, stream);
-        } else {
-            spice_info("attached stream");
-        }
-    }
-
-    worker->next_item_trace = 0;
-    memset(worker->items_trace, 0, sizeof(worker->items_trace));
 }
 
 static inline int red_current_add(RedWorker *worker, Ring *ring, Drawable *drawable)
@@ -2773,8 +2619,8 @@ static inline int red_current_add(RedWorker *worker, Ring *ring, Drawable *drawa
     if (item->effect == QXL_EFFECT_OPAQUE) {
         region_or(&exclude_rgn, &item->base.rgn);
         exclude_region(worker, ring, exclude_base, &exclude_rgn, NULL, drawable);
-        red_use_stream_trace(worker, drawable);
-        red_streams_update_visible_region(worker, drawable);
+        red_use_stream_trace(worker->display_channel, drawable);
+        streams_update_visible_region(worker->display_channel, drawable);
         /*
          * Performing the insertion after exclude_region for
          * safety (todo: Not sure if exclude_region can affect the drawable
@@ -2788,8 +2634,8 @@ static inline int red_current_add(RedWorker *worker, Ring *ring, Drawable *drawa
          * before calling red_detach_streams_behind
          */
         __current_add_drawable(worker, drawable, ring);
-        if (is_primary_surface(worker, drawable->surface_id)) {
-            red_detach_streams_behind(worker, &drawable->tree_item.base.rgn, drawable);
+        if (is_primary_surface(worker->display_channel, drawable->surface_id)) {
+            detach_streams_behind(worker->display_channel, &drawable->tree_item.base.rgn, drawable);
         }
     }
     region_destroy(&exclude_rgn);
@@ -2808,6 +2654,7 @@ static void add_clip_rects(QRegion *rgn, SpiceClipRects *data)
 
 static inline int red_current_add_with_shadow(RedWorker *worker, Ring *ring, Drawable *item)
 {
+    DisplayChannel *display = worker->display_channel;
 #ifdef RED_WORKER_STAT
     stat_time_t start_time = stat_now(worker);
     ++worker->add_with_shadow_count;
@@ -2829,8 +2676,8 @@ static inline int red_current_add_with_shadow(RedWorker *worker, Ring *ring, Dra
     // for now putting them on root.
 
     // only primary surface streams are supported
-    if (is_primary_surface(worker, item->surface_id)) {
-        red_detach_streams_behind(worker, &shadow->base.rgn, NULL);
+    if (is_primary_surface(display, item->surface_id)) {
+        detach_streams_behind(display, &shadow->base.rgn, NULL);
     }
 
     ring_add(ring, &shadow->base.siblings_link);
@@ -2840,10 +2687,10 @@ static inline int red_current_add_with_shadow(RedWorker *worker, Ring *ring, Dra
         region_clone(&exclude_rgn, &item->tree_item.base.rgn);
         exclude_region(worker, ring, &shadow->base.siblings_link, &exclude_rgn, NULL, NULL);
         region_destroy(&exclude_rgn);
-        red_streams_update_visible_region(worker, item);
+        streams_update_visible_region(display, item);
     } else {
-        if (is_primary_surface(worker, item->surface_id)) {
-            red_detach_streams_behind(worker, &item->tree_item.base.rgn, item);
+        if (is_primary_surface(display, item->surface_id)) {
+            detach_streams_behind(display, &item->tree_item.base.rgn, item);
         }
     }
     stat_add(&worker->add_stat, start_time);
@@ -2855,22 +2702,22 @@ static inline int has_shadow(RedDrawable *drawable)
     return drawable->type == QXL_COPY_BITS;
 }
 
-static inline void red_update_streamable(RedWorker *worker, Drawable *drawable,
-                                         RedDrawable *red_drawable)
+static void drawable_update_streamable(DisplayChannel *display, Drawable *drawable)
 {
+    RedDrawable *red_drawable = drawable->red_drawable;
     SpiceImage *image;
 
-    if (worker->streaming_video == STREAM_VIDEO_OFF) {
+    if (display->stream_video == STREAM_VIDEO_OFF) {
         return;
     }
 
-    if (!is_primary_surface(worker, drawable->surface_id)) {
+    if (!is_primary_surface(display, drawable->surface_id)) {
         return;
     }
 
     if (drawable->tree_item.effect != QXL_EFFECT_OPAQUE ||
-                                        red_drawable->type != QXL_DRAW_COPY ||
-                                        red_drawable->u.copy.rop_descriptor != SPICE_ROPD_OP_PUT) {
+        red_drawable->type != QXL_DRAW_COPY ||
+        red_drawable->u.copy.rop_descriptor != SPICE_ROPD_OP_PUT) {
         return;
     }
 
@@ -2880,7 +2727,7 @@ static inline void red_update_streamable(RedWorker *worker, Drawable *drawable,
         return;
     }
 
-    if (worker->streaming_video == STREAM_VIDEO_FILTER) {
+    if (display->stream_video == STREAM_VIDEO_FILTER) {
         SpiceRect* rect;
         int size;
 
@@ -2924,6 +2771,7 @@ static void red_print_stats(RedWorker *worker)
 
 static int red_add_drawable(RedWorker *worker, Drawable *drawable)
 {
+    DisplayChannel *display = worker->display_channel;
     int ret = FALSE, surface_id = drawable->surface_id;
     RedDrawable *red_drawable = drawable->red_drawable;
     Ring *ring = &worker->surfaces[surface_id].current;
@@ -2931,7 +2779,7 @@ static int red_add_drawable(RedWorker *worker, Drawable *drawable)
     if (has_shadow(red_drawable)) {
         ret = red_current_add_with_shadow(worker, ring, drawable);
     } else {
-        red_update_streamable(worker, drawable, red_drawable);
+        drawable_update_streamable(display, drawable);
         ret = red_current_add(worker, ring, drawable);
     }
 
@@ -2984,6 +2832,7 @@ static int rgb32_data_has_alpha(int width, int height, size_t stride,
 
 static inline int red_handle_self_bitmap(RedWorker *worker, Drawable *drawable)
 {
+    DisplayChannel *display = worker->display_channel;
     SpiceImage *image;
     int32_t width;
     int32_t height;
@@ -3029,7 +2878,7 @@ static inline int red_handle_self_bitmap(RedWorker *worker, Drawable *drawable)
 
     /* For 32bit non-primary surfaces we need to keep any non-zero
        high bytes as the surface may be used as source to an alpha_blend */
-    if (!is_primary_surface(worker, drawable->surface_id) &&
+    if (!is_primary_surface(display, drawable->surface_id) &&
         image->u.bitmap.format == SPICE_BITMAP_FMT_32BIT &&
         rgb32_data_has_alpha(width, height, dest_stride, dest, &all_set)) {
         if (all_set) {
@@ -3130,6 +2979,7 @@ static inline void add_to_surface_dependency(RedWorker *worker, int depend_on_su
 
 static inline int red_handle_surfaces_dependencies(RedWorker *worker, Drawable *drawable)
 {
+    DisplayChannel *display = worker->display_channel;
     int x;
 
     for (x = 0; x < 3; ++x) {
@@ -3143,7 +2993,7 @@ static inline int red_handle_surfaces_dependencies(RedWorker *worker, Drawable *
                 QRegion depend_region;
                 region_init(&depend_region);
                 region_add(&depend_region, &drawable->red_drawable->surfaces_rects[x]);
-                red_detach_streams_behind(worker, &depend_region, NULL);
+                detach_streams_behind(display, &depend_region, NULL);
             }
         }
     }
@@ -3940,9 +3790,9 @@ static void red_current_flush(RedWorker *worker, int surface_id)
 static ImageItem *red_add_surface_area_image(DisplayChannelClient *dcc, int surface_id,
                                              SpiceRect *area, PipeItem *pos, int can_lossy)
 {
-    DisplayChannel *display_channel = DCC_TO_DC(dcc);
-    RedWorker *worker = display_channel->common.worker;
-    RedChannel *channel = RED_CHANNEL(display_channel);
+    DisplayChannel *display = DCC_TO_DC(dcc);
+    RedChannel *channel = RED_CHANNEL(display);
+    RedWorker *worker = DCC_TO_WORKER(dcc);
     RedSurface *surface = &worker->surfaces[surface_id];
     SpiceCanvas *canvas = surface->context.canvas;
     ImageItem *item;
@@ -3980,7 +3830,7 @@ static ImageItem *red_add_surface_area_image(DisplayChannelClient *dcc, int surf
 
     /* For 32bit non-primary surfaces we need to keep any non-zero
        high bytes as the surface may be used as source to an alpha_blend */
-    if (!is_primary_surface(worker, surface_id) &&
+    if (!is_primary_surface(display, surface_id) &&
         item->image_format == SPICE_BITMAP_FMT_32BIT &&
         rgb32_data_has_alpha(item->width, item->height, item->stride, item->data, &all_set)) {
         if (all_set) {
@@ -7082,7 +6932,7 @@ static int encode_frame(DisplayChannelClient *dcc, const SpiceRect *src,
     uint32_t image_stride;
     size_t offset;
     int i, chunk;
-    StreamAgent *agent = &dcc->stream_agents[stream - DCC_TO_WORKER(dcc)->streams_buf];
+    StreamAgent *agent = &dcc->stream_agents[get_stream_id(DCC_TO_DC(dcc), stream)];
 
     chunks = image->data;
     offset = 0;
@@ -7117,10 +6967,9 @@ static inline int red_marshall_stream_data(RedChannelClient *rcc,
                   SpiceMarshaller *base_marshaller, Drawable *drawable)
 {
     DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
-    DisplayChannel *display_channel = SPICE_CONTAINEROF(rcc->channel, DisplayChannel, common.base);
+    DisplayChannel *display = DCC_TO_DC(dcc);
     Stream *stream = drawable->stream;
     SpiceImage *image;
-    RedWorker *worker = DCC_TO_WORKER(dcc);
     uint32_t frame_mm_time;
     int n;
     int width, height;
@@ -7132,7 +6981,6 @@ static inline int red_marshall_stream_data(RedChannelClient *rcc,
     }
     spice_assert(drawable->red_drawable->type == QXL_DRAW_COPY);
 
-    worker = display_channel->common.worker;
     image = drawable->red_drawable->u.copy.src_bitmap;
 
     if (image->descriptor.type != SPICE_IMAGE_TYPE_BITMAP) {
@@ -7153,7 +7001,7 @@ static inline int red_marshall_stream_data(RedChannelClient *rcc,
         height = stream->height;
     }
 
-    StreamAgent *agent = &dcc->stream_agents[get_stream_id(worker, stream)];
+    StreamAgent *agent = &dcc->stream_agents[get_stream_id(display, stream)];
     uint64_t time_now = red_get_monotonic_time();
     size_t outbuf_size;
 
@@ -7205,7 +7053,7 @@ static inline int red_marshall_stream_data(RedChannelClient *rcc,
 
         red_channel_client_init_send_data(rcc, SPICE_MSG_DISPLAY_STREAM_DATA, NULL);
 
-        stream_data.base.id = get_stream_id(worker, stream);
+        stream_data.base.id = get_stream_id(display, stream);
         stream_data.base.multi_media_time = frame_mm_time;
         stream_data.data_size = n;
 
@@ -7215,7 +7063,7 @@ static inline int red_marshall_stream_data(RedChannelClient *rcc,
 
         red_channel_client_init_send_data(rcc, SPICE_MSG_DISPLAY_STREAM_DATA_SIZED, NULL);
 
-        stream_data.base.id = get_stream_id(worker, stream);
+        stream_data.base.id = get_stream_id(display, stream);
         stream_data.base.multi_media_time = frame_mm_time;
         stream_data.data_size = n;
         stream_data.width = width;
@@ -7564,7 +7412,7 @@ static void red_display_marshall_stream_start(RedChannelClient *rcc,
     SpiceClipRects clip_rects;
 
     stream_create.surface_id = 0;
-    stream_create.id = get_stream_id(DCC_TO_WORKER(dcc), stream);
+    stream_create.id = get_stream_id(DCC_TO_DC(dcc), stream);
     stream_create.flags = stream->top_down ? SPICE_STREAM_FLAGS_TOP_DOWN : 0;
     stream_create.codec_type = SPICE_VIDEO_CODEC_TYPE_MJPEG;
 
@@ -7600,7 +7448,7 @@ static void red_display_marshall_stream_clip(RedChannelClient *rcc,
     red_channel_client_init_send_data(rcc, SPICE_MSG_DISPLAY_STREAM_CLIP, &item->base);
     SpiceMsgDisplayStreamClip stream_clip;
 
-    stream_clip.id = get_stream_id(DCC_TO_WORKER(dcc), agent->stream);
+    stream_clip.id = get_stream_id(DCC_TO_DC(dcc), agent->stream);
     stream_clip.clip.type = item->clip_type;
     stream_clip.clip.rects = item->rects;
 
@@ -7614,7 +7462,7 @@ static void red_display_marshall_stream_end(RedChannelClient *rcc,
     SpiceMsgDisplayStreamDestroy destroy;
 
     red_channel_client_init_send_data(rcc, SPICE_MSG_DISPLAY_STREAM_DESTROY, NULL);
-    destroy.id = get_stream_id(DCC_TO_WORKER(dcc), agent->stream);
+    destroy.id = get_stream_id(DCC_TO_DC(dcc), agent->stream);
     red_display_stream_agent_stop(dcc, agent);
     spice_marshall_msg_display_stream_destroy(base_marshaller, &destroy);
 }
@@ -7824,7 +7672,7 @@ static void display_channel_client_on_disconnect(RedChannelClient *rcc)
     free(dcc->send_data.stream_outbuf);
     red_display_reset_compress_buf(dcc);
     free(dcc->send_data.free_list.res);
-    red_display_destroy_streams_agents(dcc);
+    dcc_destroy_stream_agents(dcc);
 
     // this was the last channel client
     if (!red_channel_is_connected(rcc->channel)) {
@@ -7846,20 +7694,20 @@ void red_disconnect_all_display_TODO_remove_me(RedChannel *channel)
     red_channel_apply_clients(channel, red_channel_client_disconnect);
 }
 
-static void red_destroy_streams(RedWorker *worker)
+static void detach_and_stop_streams(DisplayChannel *display)
 {
     RingItem *stream_item;
 
     spice_debug(NULL);
-    while ((stream_item = ring_get_head(&worker->streams))) {
+    while ((stream_item = ring_get_head(&display->streams))) {
         Stream *stream = SPICE_CONTAINEROF(stream_item, Stream, link);
 
-        red_detach_stream_gracefully(worker, stream, NULL);
-        red_stop_stream(worker, stream);
+        detach_stream_gracefully(display, stream, NULL);
+        stop_stream(display, stream);
     }
 }
 
-static void red_migrate_display(RedWorker *worker, RedChannelClient *rcc)
+static void red_migrate_display(DisplayChannel *display, RedChannelClient *rcc)
 {
     /* We need to stop the streams, and to send upgrade_items to the client.
      * Otherwise, (1) the client might display lossy regions that we don't track
@@ -7868,10 +7716,10 @@ static void red_migrate_display(RedWorker *worker, RedChannelClient *rcc)
      * being sent to the client after MSG_MIGRATE and before MSG_MIGRATE_DATA (e.g.,
      * STREAM_CLIP, STREAM_DESTROY, DRAW_COPY)
      * No message besides MSG_MIGRATE_DATA should be sent after MSG_MIGRATE.
-     * Notice that red_destroy_streams won't lead to any dev ram changes, since
+     * Notice that detach_and_stop_streams won't lead to any dev ram changes, since
      * handle_dev_stop already took care of releasing all the dev ram resources.
      */
-    red_destroy_streams(worker);
+    detach_and_stop_streams(display);
     if (red_channel_client_is_connected(rcc)) {
         red_channel_client_default_migrate(rcc);
     }
@@ -7992,7 +7840,7 @@ static inline void red_create_surface_item(DisplayChannelClient *dcc, int surfac
     RedSurface *surface;
     SurfaceCreateItem *create;
     RedWorker *worker = dcc ? DCC_TO_WORKER(dcc) : NULL;
-    uint32_t flags = is_primary_surface(worker, surface_id) ? SPICE_SURFACE_FLAGS_PRIMARY : 0;
+    uint32_t flags = is_primary_surface(DCC_TO_DC(dcc), surface_id) ? SPICE_SURFACE_FLAGS_PRIMARY : 0;
 
     /* don't send redundant create surface commands to client */
     if (!dcc || worker->display_channel->common.during_target_migrate ||
@@ -8247,7 +8095,7 @@ static void on_new_display_channel_client(DisplayChannelClient *dcc)
         red_push_surface_image(dcc, 0);
         dcc_push_monitors_config(dcc);
         red_pipe_add_verb(rcc, SPICE_MSG_DISPLAY_MARK);
-        red_disply_start_streams(dcc);
+        dcc_create_all_streams(dcc);
     }
 }
 
@@ -8922,17 +8770,17 @@ static void display_channel_hold_pipe_item(RedChannelClient *rcc, PipeItem *item
 static void display_channel_client_release_item_after_push(DisplayChannelClient *dcc,
                                                            PipeItem *item)
 {
-    RedWorker *worker = DCC_TO_WORKER(dcc);
+    DisplayChannel *display = DCC_TO_DC(dcc);
 
     switch (item->type) {
     case PIPE_ITEM_TYPE_DRAW:
         drawable_pipe_item_unref(SPICE_CONTAINEROF(item, DrawablePipeItem, dpi_pipe_item));
         break;
     case PIPE_ITEM_TYPE_STREAM_CLIP:
-        red_display_release_stream_clip(worker, (StreamClipItem *)item);
+        display_stream_clip_unref(display, (StreamClipItem *)item);
         break;
     case PIPE_ITEM_TYPE_UPGRADE:
-        release_upgrade_item(worker, (UpgradeItem *)item);
+        release_upgrade_item(DCC_TO_WORKER(dcc), (UpgradeItem *)item);
         break;
     case PIPE_ITEM_TYPE_IMAGE:
         release_image_item((ImageItem *)item);
@@ -8957,7 +8805,7 @@ static void display_channel_client_release_item_after_push(DisplayChannelClient 
 static void display_channel_client_release_item_before_push(DisplayChannelClient *dcc,
                                                             PipeItem *item)
 {
-    RedWorker *worker = DCC_TO_WORKER(dcc);
+    DisplayChannel *display = DCC_TO_DC(dcc);
 
     switch (item->type) {
     case PIPE_ITEM_TYPE_DRAW: {
@@ -8968,19 +8816,19 @@ static void display_channel_client_release_item_before_push(DisplayChannelClient
     }
     case PIPE_ITEM_TYPE_STREAM_CREATE: {
         StreamAgent *agent = SPICE_CONTAINEROF(item, StreamAgent, create_item);
-        red_display_release_stream(worker, agent);
+        display_stream_agent_unref(display, agent);
         break;
     }
     case PIPE_ITEM_TYPE_STREAM_CLIP:
-        red_display_release_stream_clip(worker, (StreamClipItem *)item);
+        display_stream_clip_unref(display, (StreamClipItem *)item);
         break;
     case PIPE_ITEM_TYPE_STREAM_DESTROY: {
         StreamAgent *agent = SPICE_CONTAINEROF(item, StreamAgent, destroy_item);
-        red_display_release_stream(worker, agent);
+        display_stream_agent_unref(display, agent);
         break;
     }
     case PIPE_ITEM_TYPE_UPGRADE:
-        release_upgrade_item(worker, (UpgradeItem *)item);
+        release_upgrade_item(DCC_TO_WORKER(dcc), (UpgradeItem *)item);
         break;
     case PIPE_ITEM_TYPE_IMAGE:
         release_image_item((ImageItem *)item);
@@ -9033,6 +8881,19 @@ static void display_channel_release_item(RedChannelClient *rcc, PipeItem *item, 
     worker->timeout = 0;
 }
 
+static void init_streams(DisplayChannel *display)
+{
+    int i;
+
+    ring_init(&display->streams);
+    display->free_streams = NULL;
+    for (i = 0; i < NUM_STREAMS; i++) {
+        Stream *stream = &display->streams_buf[i];
+        ring_item_init(&stream->link);
+        display_stream_free(display, stream);
+    }
+}
+
 static void display_channel_create(RedWorker *worker, int migrate)
 {
     DisplayChannel *display_channel;
@@ -9049,7 +8910,7 @@ static void display_channel_create(RedWorker *worker, int migrate)
     spice_return_if_fail(num_renderers > 0);
 
     spice_info("create display channel");
-    if (!(worker->display_channel = (DisplayChannel *)red_worker_new_channel(
+    if (!(display_channel = (DisplayChannel *)red_worker_new_channel(
             worker, sizeof(*display_channel), "display_channel",
             SPICE_CHANNEL_DISPLAY,
             SPICE_MIGRATE_NEED_FLUSH | SPICE_MIGRATE_NEED_DATA_TRANSFER,
@@ -9057,7 +8918,7 @@ static void display_channel_create(RedWorker *worker, int migrate)
         spice_warning("failed to create display channel");
         return;
     }
-    display_channel = worker->display_channel;
+    worker->display_channel = display_channel;
 #ifdef RED_STATISTICS
     RedChannel *channel = RED_CHANNEL(display_channel);
     display_channel->cache_hits_counter = stat_add_counter(channel->stat,
@@ -9077,6 +8938,7 @@ static void display_channel_create(RedWorker *worker, int migrate)
     display_channel->num_renderers = num_renderers;
     memcpy(display_channel->renderers, renderers, sizeof(display_channel->renderers));
     display_channel->renderer = RED_RENDERER_INVALID;
+    init_streams(display_channel);
 }
 
 static void guest_set_client_capabilities(RedWorker *worker)
@@ -9180,7 +9042,7 @@ static void handle_new_display_channel(RedWorker *worker, RedClient *client, Red
 
     // todo: tune level according to bandwidth
     display_channel->zlib_level = ZLIB_DEFAULT_COMPRESSION_LEVEL;
-    red_display_client_init_streams(dcc);
+    dcc_init_stream_agents(dcc);
     on_new_display_channel_client(dcc);
 }
 
@@ -9368,6 +9230,7 @@ void handle_dev_destroy_surface_wait(void *opaque, uint32_t message_type, void *
 /* TODO: split me*/
 static inline void dev_destroy_surfaces(RedWorker *worker)
 {
+    DisplayChannel *display = worker->display_channel;
     int i;
 
     spice_debug(NULL);
@@ -9382,7 +9245,7 @@ static inline void dev_destroy_surfaces(RedWorker *worker)
             spice_assert(!worker->surfaces[i].context.canvas);
         }
     }
-    spice_assert(ring_is_empty(&worker->streams));
+    spice_assert(ring_is_empty(&display->streams));
 
     if (display_is_connected(worker)) {
         red_channel_pipes_add_type(RED_CHANNEL(worker->display_channel),
@@ -9495,6 +9358,7 @@ void handle_dev_create_primary_surface(void *opaque, uint32_t message_type, void
 
 static void dev_destroy_primary_surface(RedWorker *worker, uint32_t surface_id)
 {
+    DisplayChannel *display = worker->display_channel;
     spice_warn_if(surface_id != 0);
 
     spice_debug(NULL);
@@ -9506,7 +9370,7 @@ static void dev_destroy_primary_surface(RedWorker *worker, uint32_t surface_id)
     flush_all_qxl_commands(worker);
     dev_destroy_surface_wait(worker, 0);
     red_destroy_surface(worker, 0);
-    spice_assert(ring_is_empty(&worker->streams));
+    spice_warn_if_fail(ring_is_empty(&display->streams));
 
     spice_assert(!worker->surfaces[surface_id].context.canvas);
 
@@ -9751,7 +9615,7 @@ void handle_dev_display_migrate(void *opaque, uint32_t message_type, void *paylo
     RedChannelClient *rcc = msg->rcc;
     spice_info("migrate display client");
     spice_assert(rcc);
-    red_migrate_display(worker, rcc);
+    red_migrate_display(worker->display_channel, rcc);
 }
 
 static void handle_dev_monitors_config_async(void *opaque,
@@ -9859,21 +9723,7 @@ void handle_dev_set_streaming_video(void *opaque, uint32_t message_type, void *p
     RedWorkerMessageSetStreamingVideo *msg = payload;
     RedWorker *worker = opaque;
 
-    worker->streaming_video = msg->streaming_video;
-    spice_assert(worker->streaming_video != STREAM_VIDEO_INVALID);
-    switch(worker->streaming_video) {
-        case STREAM_VIDEO_ALL:
-            spice_info("sv all");
-            break;
-        case STREAM_VIDEO_FILTER:
-            spice_info("sv filter");
-            break;
-        case STREAM_VIDEO_OFF:
-            spice_info("sv off");
-            break;
-        default:
-            spice_warning("sv invalid");
-    }
+    display_channel_set_stream_video(worker->display_channel, msg->streaming_video);
 }
 
 void handle_dev_set_mouse_mode(void *opaque, uint32_t message_type, void *payload)
@@ -10162,6 +10012,8 @@ static gboolean worker_source_prepare(GSource *source, gint *timeout)
     RedWorker *worker = wsource->worker;
 
     *timeout = worker->timeout;
+    *timeout = MIN(worker->timeout,
+                   display_channel_get_streams_timout(worker->display_channel));
     if (*timeout == 0)
         return TRUE;
 
@@ -10183,21 +10035,39 @@ static void red_display_cc_free_glz_drawables(RedChannelClient *rcc)
     red_display_handle_glz_drawables_to_free(dcc);
 }
 
+static void display_channel_streams_timout(DisplayChannel *display)
+{
+    Ring *ring = &display->streams;
+    RingItem *item;
+
+    red_time_t now = red_get_monotonic_time();
+    item = ring_get_head(ring);
+    while (item) {
+        Stream *stream = SPICE_CONTAINEROF(item, Stream, link);
+        item = ring_next(ring, item);
+        if (now >= (stream->last_time + RED_STREAM_TIMOUT)) {
+            detach_stream_gracefully(display, stream, NULL);
+            stop_stream(display, stream);
+        }
+    }
+}
 static gboolean worker_source_dispatch(GSource *source, GSourceFunc callback,
                                        gpointer user_data)
 {
     RedWorkerSource *wsource = (RedWorkerSource *)source;
     RedWorker *worker = wsource->worker;
+    DisplayChannel *display = worker->display_channel;
     int ring_is_empty;
 
-    if (worker->display_channel) {
-        /* during migration, in the dest, the display channel can be initialized
-           while the global lz data not since migrate data msg hasn't been
-           received yet */
-        /* FIXME: why is this here, and not in display_channel_create */
-        red_channel_apply_clients(&worker->display_channel->common.base,
-                                  red_display_cc_free_glz_drawables);
-    }
+    /* during migration, in the dest, the display channel can be initialized
+       while the global lz data not since migrate data msg hasn't been
+       received yet */
+    /* FIXME: why is this here, and not in display_channel_create */
+    red_channel_apply_clients(RED_CHANNEL(display),
+                              red_display_cc_free_glz_drawables);
+
+    /* FIXME: could use its own source */
+    display_channel_streams_timout(display);
 
     worker->timeout = -1;
     red_process_cursor(worker, MAX_PIPE_SIZE, &ring_is_empty);
@@ -10248,13 +10118,11 @@ RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher)
     worker->image_compression = image_compression;
     worker->jpeg_state = jpeg_state;
     worker->zlib_glz_state = zlib_glz_state;
-    worker->streaming_video = streaming_video;
     worker->driver_cap_monitors_config = 0;
     ring_init(&worker->current_list);
     image_cache_init(&worker->image_cache);
     image_surface_init(worker);
     drawables_init(worker);
-    red_init_streams(worker);
     stat_init(&worker->add_stat, add_stat_name);
     stat_init(&worker->exclude_stat, exclude_stat_name);
     stat_init(&worker->__exclude_stat, __exclude_stat_name);

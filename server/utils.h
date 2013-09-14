@@ -1,6 +1,7 @@
 #ifndef UTILS_H_
 # define UTILS_H_
 
+#include <stdint.h>
 #include <time.h>
 
 typedef int64_t red_time_t;
