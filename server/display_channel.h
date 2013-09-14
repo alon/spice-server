@@ -283,6 +283,8 @@ struct DisplayChannel {
     uint32_t next_item_trace;
     uint64_t streams_size_total;
 
+    ImageCache image_cache;
+
 #ifdef RED_STATISTICS
     uint64_t *cache_hits_counter;
     uint64_t *add_to_cache_counter;

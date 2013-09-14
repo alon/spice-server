@@ -5,8 +5,11 @@
 
 #include "common/pixman_utils.h"
 #include "common/canvas_base.h"
-
 #include "common/ring.h"
+
+/* FIXME: move back to display_channel.h (once structs are private) */
+typedef struct Drawable Drawable;
+typedef struct _DisplayChannelClient DisplayChannelClient;
 
 typedef struct ImageCacheItem {
     RingItem lru_link;
@@ -31,9 +34,15 @@ typedef struct ImageCache {
 #endif
 } ImageCache;
 
-int image_cache_hit(ImageCache *cache, uint64_t id);
-void image_cache_init(ImageCache *cache);
-void image_cache_reset(ImageCache *cache);
-void image_cache_aging(ImageCache *cache);
+int          image_cache_hit               (ImageCache *cache, uint64_t id);
+void         image_cache_init              (ImageCache *cache);
+void         image_cache_reset             (ImageCache *cache);
+void         image_cache_aging             (ImageCache *cache);
+void         image_cache_localize          (ImageCache *cache, SpiceImage **image_ptr,
+                                            SpiceImage *image_store, Drawable *drawable);
+void         image_cache_localize_brush    (ImageCache *cache, SpiceBrush *brush,
+                                            SpiceImage *image_store);
+void         image_cache_localize_mask     (ImageCache *cache, SpiceQMask *mask,
+                                            SpiceImage *image_store);
 
 #endif
