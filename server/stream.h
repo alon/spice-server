@@ -23,6 +23,9 @@
 #define RED_STREAM_DEFAULT_HIGH_START_BIT_RATE (10 * 1024 * 1024) // 10Mbps
 #define RED_STREAM_DEFAULT_LOW_START_BIT_RATE (2.5 * 1024 * 1024) // 2.5Mbps
 
+/* move back to display_channel once struct private */
+typedef struct DisplayChannel DisplayChannel;
+
 typedef struct Stream Stream;
 
 typedef struct StreamActivateReportItem {
@@ -116,6 +119,13 @@ struct Stream {
     uint32_t input_fps;
 };
 
+void                  stream_init                                   (DisplayChannel *display);
+void                  stream_stop                                   (DisplayChannel *display,
+                                                                     Stream *stream);
+void                  stream_unref                                  (DisplayChannel *display,
+                                                                     Stream *stream);
+void                  stream_agent_unref                            (DisplayChannel *display,
+                                                                     StreamAgent *agent);
 void                  stream_agent_stats_print                      (StreamAgent *agent);
 
 #endif /* STREAM_H */

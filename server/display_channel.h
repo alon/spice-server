@@ -3,6 +3,7 @@
 
 #include <setjmp.h>
 
+#include "common/rect.h"
 #include "red_worker.h"
 #include "reds_stream.h"
 #include "cache_item.h"
@@ -36,8 +37,6 @@
 #include "utils.h"
 #include "tree_item.h"
 #include "stream.h"
-
-typedef struct DisplayChannel DisplayChannel;
 
 #define PALETTE_CACHE_HASH_SHIFT 8
 #define PALETTE_CACHE_HASH_SIZE (1 << PALETTE_CACHE_HASH_SHIFT)
@@ -189,8 +188,8 @@ struct _DisplayChannelClient {
 
 #define DCC_TO_WORKER(dcc)                                              \
     (SPICE_CONTAINEROF((dcc)->common.base.channel, CommonChannel, base)->worker)
-#define DCC_TO_DC(dcc) SPICE_CONTAINEROF((dcc)->common.base.channel,    \
-                                         DisplayChannel, common.base)
+#define DCC_TO_DC(dcc)                                                  \
+     SPICE_CONTAINEROF((dcc)->common.base.channel, DisplayChannel, common.base)
 #define RCC_TO_DCC(rcc) SPICE_CONTAINEROF((rcc), DisplayChannelClient, common.base)
 
 
@@ -258,6 +257,30 @@ void                       monitors_config_unref                     (MonitorsCo
 #define ITEMS_TRACE_MASK (NUM_TRACE_ITEMS - 1)
 
 /* TODO: move to .c */
+typedef struct DrawContext {
+    SpiceCanvas *canvas;
+    int canvas_draws_on_surface;
+    int top_down;
+    uint32_t width;
+    uint32_t height;
+    int32_t stride;
+    uint32_t format;
+    void *line_0;
+} DrawContext;
+
+typedef struct RedSurface {
+    uint32_t refs;
+    Ring current;
+    Ring current_list;
+    DrawContext context;
+
+    Ring depend_on_me;
+    QRegion draw_dirty_region;
+
+    //fix me - better handling here
+    QXLReleaseInfoExt create, destroy;
+} RedSurface;
+
 #define NUM_DRAWABLES 1000
 typedef struct _Drawable _Drawable;
 struct _Drawable {
@@ -296,6 +319,10 @@ struct DisplayChannel {
     uint32_t next_item_trace;
     uint64_t streams_size_total;
 
+    RedSurface surfaces[NUM_SURFACES];
+    uint32_t n_surfaces;
+    SpiceImageSurfaces image_surfaces;
+
     ImageCache image_cache;
     RedCompressBuf *free_compress_bufs;
 
@@ -313,6 +340,21 @@ struct DisplayChannel {
     stat_info_t jpeg_alpha_stat;
 #endif
 };
+
+#define LINK_TO_DCC(ptr) SPICE_CONTAINEROF(ptr, DisplayChannelClient,   \
+                                           common.base.channel_link)
+#define DCC_FOREACH_SAFE(link, next, dcc, channel)                      \
+    SAFE_FOREACH(link, next, channel,  &(channel)->clients, dcc, LINK_TO_DCC(link))
+
+
+#define FOREACH_DCC(display_channel, link, next, dcc)                   \
+    DCC_FOREACH_SAFE(link, next, dcc, RED_CHANNEL(display_channel))
+
+static inline int get_stream_id(DisplayChannel *display, Stream *stream)
+{
+    return (int)(stream - display->streams_buf);
+}
+
 typedef struct SurfaceDestroyItem {
     SpiceMsgSurfaceDestroy surface_destroy;
     PipeItem pipe_item;
@@ -340,7 +382,105 @@ int                        display_channel_get_streams_timout        (DisplayCha
 void                       display_channel_compress_stats_print      (const DisplayChannel *display);
 void                       display_channel_compress_stats_reset      (DisplayChannel *display);
 void                       display_channel_drawable_unref            (DisplayChannel *display, Drawable *drawable);
+void                       display_channel_surface_unref             (DisplayChannel *display,
+                                                                      uint32_t surface_id);
+bool                       display_channel_surface_has_canvas        (DisplayChannel *display,
+                                                                      uint32_t surface_id);
+void                       display_channel_set_surface_release_info  (DisplayChannel *display,
+                                                                      uint32_t surface_id,
+                                                                      int is_create,
+                                                                      QXLReleaseInfo *info,
+                                                                      uint32_t group_id);
+void                       display_channel_show_tree                 (DisplayChannel *display);
 
+static inline int is_equal_path(SpicePath *path1, SpicePath *path2)
+{
+    SpicePathSeg *seg1, *seg2;
+    int i, j;
+
+    if (path1->num_segments != path2->num_segments)
+        return FALSE;
+
+    for (i = 0; i < path1->num_segments; i++) {
+        seg1 = path1->segments[i];
+        seg2 = path2->segments[i];
+
+        if (seg1->flags != seg2->flags ||
+            seg1->count != seg2->count) {
+            return FALSE;
+        }
+        for (j = 0; j < seg1->count; j++) {
+            if (seg1->points[j].x != seg2->points[j].x ||
+                seg1->points[j].y != seg2->points[j].y) {
+                return FALSE;
+            }
+        }
+    }
+
+    return TRUE;
+}
+
+// partial imp
+static inline int is_equal_brush(SpiceBrush *b1, SpiceBrush *b2)
+{
+    return b1->type == b2->type &&
+           b1->type == SPICE_BRUSH_TYPE_SOLID &&
+           b1->u.color == b2->u.color;
+}
+
+// partial imp
+static inline int is_equal_line_attr(SpiceLineAttr *a1, SpiceLineAttr *a2)
+{
+    return a1->flags == a2->flags &&
+           a1->style_nseg == a2->style_nseg &&
+           a1->style_nseg == 0;
+}
+
+// partial imp
+static inline int is_same_geometry(Drawable *d1, Drawable *d2)
+{
+    if (d1->red_drawable->type != d2->red_drawable->type) {
+        return FALSE;
+    }
+
+    switch (d1->red_drawable->type) {
+    case QXL_DRAW_STROKE:
+        return is_equal_line_attr(&d1->red_drawable->u.stroke.attr,
+                                  &d2->red_drawable->u.stroke.attr) &&
+               is_equal_path(d1->red_drawable->u.stroke.path,
+                             d2->red_drawable->u.stroke.path);
+    case QXL_DRAW_FILL:
+        return rect_is_equal(&d1->red_drawable->bbox, &d2->red_drawable->bbox);
+    default:
+        return FALSE;
+    }
+}
+
+static inline int is_same_drawable(Drawable *d1, Drawable *d2)
+{
+    if (!is_same_geometry(d1, d2)) {
+        return FALSE;
+    }
+
+    switch (d1->red_drawable->type) {
+    case QXL_DRAW_STROKE:
+        return is_equal_brush(&d1->red_drawable->u.stroke.brush,
+                              &d2->red_drawable->u.stroke.brush);
+    case QXL_DRAW_FILL:
+        return is_equal_brush(&d1->red_drawable->u.fill.brush,
+                              &d2->red_drawable->u.fill.brush);
+    default:
+        return FALSE;
+    }
+}
+
+static inline int is_primary_surface(DisplayChannel *display, uint32_t surface_id)
+{
+    if (surface_id == 0) {
+        return TRUE;
+    }
+    return FALSE;
+}
 
 
 #endif /* DISPLAY_CHANNEL_H_ */
