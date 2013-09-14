@@ -195,6 +195,35 @@ void dcc_push_monitors_config(DisplayChannelClient *dcc)
     red_channel_client_push(&dcc->common.base);
 }
 
+static SurfaceDestroyItem *surface_destroy_item_new(RedChannel *channel,
+                                                    uint32_t surface_id)
+{
+    SurfaceDestroyItem *destroy;
+
+    destroy = (SurfaceDestroyItem *)malloc(sizeof(SurfaceDestroyItem));
+    destroy->surface_destroy.surface_id = surface_id;
+    red_channel_pipe_item_init(channel, &destroy->pipe_item,
+                               PIPE_ITEM_TYPE_DESTROY_SURFACE);
+
+    return destroy;
+}
+
+void dcc_push_destroy_surface(DisplayChannelClient *dcc, uint32_t surface_id)
+{
+    DisplayChannel *display = DCC_TO_DC(dcc);
+    RedChannel *channel = RED_CHANNEL(display);
+    SurfaceDestroyItem *destroy;
+
+    if (!dcc || COMMON_CHANNEL(display)->during_target_migrate ||
+        !dcc->surface_client_created[surface_id]) {
+        return;
+    }
+
+    dcc->surface_client_created[surface_id] = FALSE;
+    destroy = surface_destroy_item_new(channel, surface_id);
+    red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &destroy->pipe_item);
+}
+
 int display_channel_get_streams_timout(DisplayChannel *display)
 {
     int timout = INT_MAX;
