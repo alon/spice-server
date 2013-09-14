@@ -267,6 +267,9 @@ struct DisplayChannel {
     uint32_t renderers[RED_RENDERER_LAST];
     uint32_t renderer;
 
+    Ring current_list; // of TreeItem
+    uint32_t current_size;
+
     int enable_jpeg;
     int jpeg_quality;
     int enable_zlib_glz_wrap;

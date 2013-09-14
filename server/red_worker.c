@@ -349,8 +349,6 @@ typedef struct RedWorker {
     uint32_t n_surfaces;
     SpiceImageSurfaces image_surfaces;
 
-    Ring current_list;
-    uint32_t current_size;
     uint32_t drawable_count;
     uint32_t red_drawable_count;
     uint32_t glz_drawable_count;
@@ -1146,17 +1144,19 @@ static void red_flush_source_surfaces(RedWorker *worker, Drawable *drawable)
 
 static inline void current_remove_drawable(RedWorker *worker, Drawable *item)
 {
+    DisplayChannel *display = worker->display_channel;
+
     if (item->tree_item.effect != QXL_EFFECT_OPAQUE) {
         worker->transparent_count--;
     }
 
-    display_stream_trace_add_drawable(worker->display_channel, item);
+    display_stream_trace_add_drawable(display, item);
     remove_shadow(worker, &item->tree_item);
     ring_remove(&item->tree_item.base.siblings_link);
     ring_remove(&item->list_link);
     ring_remove(&item->surface_list_link);
     red_worker_drawable_unref(worker, item);
-    worker->current_size--;
+    display->current_size--;
 }
 
 static void remove_drawable(RedWorker *worker, Drawable *drawable)
@@ -1478,14 +1478,15 @@ static inline int is_opaque_item(TreeItem *item)
 
 static inline void __current_add_drawable(RedWorker *worker, Drawable *drawable, RingItem *pos)
 {
+    DisplayChannel *display = worker->display_channel;
     RedSurface *surface;
     uint32_t surface_id = drawable->surface_id;
 
     surface = &worker->surfaces[surface_id];
     ring_add_after(&drawable->tree_item.base.siblings_link, pos);
-    ring_add(&worker->current_list, &drawable->list_link);
+    ring_add(&display->current_list, &drawable->list_link);
     ring_add(&surface->current_list, &drawable->surface_list_link);
-    worker->current_size++;
+    display->current_size++;
     drawable->refs++;
 }
 
@@ -2844,7 +2845,8 @@ static inline int red_handle_self_bitmap(RedWorker *worker, Drawable *drawable)
 
 static bool free_one_drawable(RedWorker *worker, int force_glz_free)
 {
-    RingItem *ring_item = ring_get_tail(&worker->current_list);
+    DisplayChannel *display = worker->display_channel;
+    RingItem *ring_item = ring_get_tail(&display->current_list);
     Drawable *drawable;
     Container *container;
 
@@ -3308,6 +3310,7 @@ static void validate_area(RedWorker *worker, const SpiceRect *area, uint32_t sur
 static void red_update_area_till(RedWorker *worker, const SpiceRect *area, int surface_id,
                                  Drawable *last)
 {
+    DisplayChannel *display = worker->display_channel;
     RedSurface *surface;
     Drawable *surface_last = NULL;
     Ring *ring;
@@ -3322,7 +3325,7 @@ static void red_update_area_till(RedWorker *worker, const SpiceRect *area, int s
 
     if (surface_id != last->surface_id) {
         // find the nearest older drawable from the appropriate surface
-        ring = &worker->current_list;
+        ring = &display->current_list;
         ring_item = &last->list_link;
         while ((ring_item = ring_next(ring, ring_item))) {
             now = SPICE_CONTAINEROF(ring_item, Drawable, list_link);
@@ -3642,6 +3645,7 @@ static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *
 
 static void red_free_some(RedWorker *worker)
 {
+    DisplayChannel *display = worker->display_channel;
     int n = 0;
     DisplayChannelClient *dcc;
     RingItem *item, *next;
@@ -3659,7 +3663,7 @@ static void red_free_some(RedWorker *worker)
         }
     }
 
-    while (!ring_is_empty(&worker->current_list) && n++ < RED_RELEASE_BUNCH_SIZE) {
+    while (!ring_is_empty(&display->current_list) && n++ < RED_RELEASE_BUNCH_SIZE) {
         free_one_drawable(worker, TRUE);
     }
 
@@ -8836,6 +8840,7 @@ static void display_channel_create(RedWorker *worker, int migrate)
     display_channel->renderer = RED_RENDERER_INVALID;
     init_streams(display_channel);
     image_cache_init(&display_channel->image_cache);
+    ring_init(&display_channel->current_list);
 }
 
 static void guest_set_client_capabilities(RedWorker *worker)
@@ -9409,6 +9414,7 @@ void handle_dev_wakeup(void *opaque, uint32_t message_type, void *payload)
 void handle_dev_oom(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
+    DisplayChannel *display = worker->display_channel;
 
     RedChannel *display_red_channel = &worker->display_channel->common.base;
     int ring_is_empty;
@@ -9419,7 +9425,7 @@ void handle_dev_oom(void *opaque, uint32_t message_type, void *payload)
                 worker->drawable_count,
                 worker->red_drawable_count,
                 worker->glz_drawable_count,
-                worker->current_size,
+                display->current_size,
                 worker->display_channel ?
                 red_channel_sum_pipes_size(display_red_channel) : 0);
     while (red_process_commands(worker, MAX_PIPE_SIZE, &ring_is_empty)) {
@@ -9433,7 +9439,7 @@ void handle_dev_oom(void *opaque, uint32_t message_type, void *payload)
                 worker->drawable_count,
                 worker->red_drawable_count,
                 worker->glz_drawable_count,
-                worker->current_size,
+                display->current_size,
                 worker->display_channel ?
                 red_channel_sum_pipes_size(display_red_channel) : 0);
     red_dispatcher_clear_pending(worker->red_dispatcher, RED_DISPATCHER_PENDING_OOM);
@@ -10019,7 +10025,6 @@ RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher)
     worker->jpeg_state = jpeg_state;
     worker->zlib_glz_state = zlib_glz_state;
     worker->driver_cap_monitors_config = 0;
-    ring_init(&worker->current_list);
     image_surface_init(worker);
     drawables_init(worker);
     stat_init(&worker->add_stat, add_stat_name);
