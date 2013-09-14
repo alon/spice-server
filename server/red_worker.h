@@ -112,6 +112,7 @@ bool       red_worker_run(RedWorker *worker);
 QXLInstance* red_worker_get_qxl(RedWorker *worker);
 RedChannel* red_worker_get_cursor_channel(RedWorker *worker);
 RedChannel* red_worker_get_display_channel(RedWorker *worker);
+GMainContext* red_worker_get_context(RedWorker *worker);
 
 RedChannel *red_worker_new_channel(RedWorker *worker, int size,
                                    const char *name,

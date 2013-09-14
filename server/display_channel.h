@@ -35,11 +35,9 @@
 #include "pixmap_cache.h"
 #include "utils.h"
 #include "tree_item.h"
+#include "stream.h"
 
 typedef struct DisplayChannel DisplayChannel;
-typedef struct _DisplayChannelClient DisplayChannelClient;
-
-typedef struct Drawable Drawable;
 
 #define PALETTE_CACHE_HASH_SHIFT 8
 #define PALETTE_CACHE_HASH_SIZE (1 << PALETTE_CACHE_HASH_SHIFT)
@@ -109,24 +107,6 @@ typedef struct {
     EncoderData data;
 } GlzData;
 
-typedef struct Stream Stream;
-struct Stream {
-    uint8_t refs;
-    Drawable *current;
-    red_time_t last_time;
-    int width;
-    int height;
-    SpiceRect dest_area;
-    int top_down;
-    Stream *next;
-    RingItem link;
-
-    guint input_fps_timer;
-    uint32_t num_input_frames;
-    uint64_t input_fps_timer_start;
-    uint32_t input_fps;
-};
-
 typedef struct DependItem {
     Drawable *drawable;
     RingItem ring_item;
@@ -163,48 +143,6 @@ struct Drawable {
 
     uint32_t process_commands_generation;
 };
-
-#define STREAM_STATS
-#ifdef STREAM_STATS
-typedef struct StreamStats {
-   uint64_t num_drops_pipe;
-   uint64_t num_drops_fps;
-   uint64_t num_frames_sent;
-   uint64_t num_input_frames;
-   uint64_t size_sent;
-
-   uint64_t start;
-   uint64_t end;
-} StreamStats;
-#endif
-
-typedef struct StreamAgent {
-    QRegion vis_region; /* the part of the surface area that is currently occupied by video
-                           fragments */
-    QRegion clip;       /* the current video clipping. It can be different from vis_region:
-                           for example, let c1 be the clip area at time t1, and c2
-                           be the clip area at time t2, where t1 < t2. If c1 contains c2, and
-                           at least part of c1/c2, hasn't been covered by a non-video images,
-                           vis_region will contain c2 and also the part of c1/c2 that still
-                           displays fragments of the video */
-
-    PipeItem create_item;
-    PipeItem destroy_item;
-    Stream *stream;
-    uint64_t last_send_time;
-    MJpegEncoder *mjpeg_encoder;
-    DisplayChannelClient *dcc;
-
-    int frames;
-    int drops;
-    int fps;
-
-    uint32_t report_id;
-    uint32_t client_required_latency;
-#ifdef STREAM_STATS
-    StreamStats stats;
-#endif
-} StreamAgent;
 
 struct _DisplayChannelClient {
     CommonChannelClient common;
@@ -313,6 +251,10 @@ MonitorsConfig*            monitors_config_new                       (QXLHead *h
 MonitorsConfig *           monitors_config_ref                       (MonitorsConfig *config);
 void                       monitors_config_unref                     (MonitorsConfig *config);
 
+#define TRACE_ITEMS_SHIFT 3
+#define NUM_TRACE_ITEMS (1 << TRACE_ITEMS_SHIFT)
+#define ITEMS_TRACE_MASK (NUM_TRACE_ITEMS - 1)
+
 /* TODO: move to .c */
 struct DisplayChannel {
     CommonChannel common; // Must be the first thing
@@ -330,6 +272,15 @@ struct DisplayChannel {
 
     RedCompressBuf *free_compress_bufs;
 
+    int stream_video;
+    uint32_t stream_count;
+    Stream streams_buf[NUM_STREAMS];
+    Stream *free_streams;
+    Ring streams;
+    ItemTrace items_trace[NUM_TRACE_ITEMS];
+    uint32_t next_item_trace;
+    uint64_t streams_size_total;
+
 #ifdef RED_STATISTICS
     uint64_t *cache_hits_counter;
     uint64_t *add_to_cache_counter;
@@ -345,6 +296,12 @@ struct DisplayChannel {
 #endif
 };
 
+void                       display_channel_set_stream_video          (DisplayChannel *display,
+                                                                      int stream_video);
+void                       display_channel_attach_stream             (DisplayChannel *display,
+                                                                      Drawable *drawable,
+                                                                      Stream *stream);
+int                        display_channel_get_streams_timout        (DisplayChannel *display);
 void                       display_channel_compress_stats_print      (const DisplayChannel *display);
 void                       display_channel_compress_stats_reset      (DisplayChannel *display);
 

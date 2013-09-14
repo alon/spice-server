@@ -115,6 +115,8 @@ libspice_server_la_SOURCES =			\
 	red_bitmap_utils.h				\
 	red_bitmap_utils.c				\
 	utils.h					\
+	stream.c					\
+	stream.h					\
 	$(NULL)
 
 if SUPPORT_GL
