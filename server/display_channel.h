@@ -258,6 +258,15 @@ void                       monitors_config_unref                     (MonitorsCo
 #define ITEMS_TRACE_MASK (NUM_TRACE_ITEMS - 1)
 
 /* TODO: move to .c */
+#define NUM_DRAWABLES 1000
+typedef struct _Drawable _Drawable;
+struct _Drawable {
+    union {
+        Drawable drawable;
+        _Drawable *next;
+    } u;
+};
+
 struct DisplayChannel {
     CommonChannel common; // Must be the first thing
 
@@ -266,16 +275,17 @@ struct DisplayChannel {
     uint32_t num_renderers;
     uint32_t renderers[RED_RENDERER_LAST];
     uint32_t renderer;
-
-    Ring current_list; // of TreeItem
-    uint32_t current_size;
-
     int enable_jpeg;
     int jpeg_quality;
     int enable_zlib_glz_wrap;
     int zlib_level;
 
-    RedCompressBuf *free_compress_bufs;
+    Ring current_list; // of TreeItem
+    uint32_t current_size;
+
+    uint32_t drawable_count;
+    _Drawable drawables[NUM_DRAWABLES];
+    _Drawable *free_drawables;
 
     int stream_video;
     uint32_t stream_count;
@@ -287,6 +297,7 @@ struct DisplayChannel {
     uint64_t streams_size_total;
 
     ImageCache image_cache;
+    RedCompressBuf *free_compress_bufs;
 
 #ifdef RED_STATISTICS
     uint64_t *cache_hits_counter;
@@ -328,5 +339,8 @@ void                       display_channel_attach_stream             (DisplayCha
 int                        display_channel_get_streams_timout        (DisplayChannel *display);
 void                       display_channel_compress_stats_print      (const DisplayChannel *display);
 void                       display_channel_compress_stats_reset      (DisplayChannel *display);
+void                       display_channel_drawable_unref            (DisplayChannel *display, Drawable *drawable);
+
+
 
 #endif /* DISPLAY_CHANNEL_H_ */
