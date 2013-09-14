@@ -1,16 +1,16 @@
 #include "display_channel.h"
 
-void display_channel_compress_stats_reset(DisplayChannel *display_channel)
+void display_channel_compress_stats_reset(DisplayChannel *display)
 {
-    spice_return_if_fail(display_channel);
+    spice_return_if_fail(display);
 
 #ifdef COMPRESS_STAT
-    stat_reset(&worker->display_channel->quic_stat);
-    stat_reset(&worker->display_channel->lz_stat);
-    stat_reset(&worker->display_channel->glz_stat);
-    stat_reset(&worker->display_channel->jpeg_stat);
-    stat_reset(&worker->display_channel->zlib_glz_stat);
-    stat_reset(&worker->display_channel->jpeg_alpha_stat);
+    stat_reset(&display->quic_stat);
+    stat_reset(&display->lz_stat);
+    stat_reset(&display->glz_stat);
+    stat_reset(&display->jpeg_stat);
+    stat_reset(&display->zlib_glz_stat);
+    stat_reset(&display->jpeg_alpha_stat);
 #endif
 }
 
