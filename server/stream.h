@@ -6,11 +6,7 @@
 #include "mjpeg_encoder.h"
 #include "common/region.h"
 #include "red_channel.h"
-
-/* FIXME: move back to display_channel.h (once structs are private) */
-typedef struct Drawable Drawable;
-typedef struct _DisplayChannelClient DisplayChannelClient;
-
+#include "spice_image_cache.h"
 
 #define RED_STREAM_DETACTION_MAX_DELTA ((1000 * 1000 * 1000) / 5) // 1/5 sec
 #define RED_STREAM_CONTINUS_MAX_DELTA (1000 * 1000 * 1000)

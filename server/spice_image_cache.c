@@ -1,4 +1,6 @@
 #include "spice_image_cache.h"
+#include "red_parse_qxl.h"
+#include "display_channel.h"
 
 static ImageCacheItem *image_cache_find(ImageCache *cache, uint64_t id)
 {
@@ -132,4 +134,62 @@ void image_cache_aging(ImageCache *cache)
         image_cache_remove(cache, item);
     }
 #endif
+}
+
+/* TODO: review usage of this fn, simplify */
+void image_cache_localize(ImageCache *cache, SpiceImage **image_ptr,
+                          SpiceImage *image_store, Drawable *drawable)
+{
+    SpiceImage *image = *image_ptr;
+
+    if (image == NULL) {
+        spice_assert(drawable != NULL);
+        spice_assert(drawable->red_drawable->self_bitmap_image != NULL);
+        *image_ptr = drawable->red_drawable->self_bitmap_image;
+        return;
+    }
+
+    if (image_cache_hit(cache, image->descriptor.id)) {
+        image_store->descriptor = image->descriptor;
+        image_store->descriptor.type = SPICE_IMAGE_TYPE_FROM_CACHE;
+        image_store->descriptor.flags = 0;
+        *image_ptr = image_store;
+        return;
+    }
+
+    switch (image->descriptor.type) {
+    case SPICE_IMAGE_TYPE_QUIC: {
+        image_store->descriptor = image->descriptor;
+        image_store->u.quic = image->u.quic;
+        *image_ptr = image_store;
+#ifdef IMAGE_CACHE_AGE
+        image_store->descriptor.flags |= SPICE_IMAGE_FLAGS_CACHE_ME;
+#else
+        if (image_store->descriptor.width * image->descriptor.height >= 640 * 480) {
+            image_store->descriptor.flags |= SPICE_IMAGE_FLAGS_CACHE_ME;
+        }
+#endif
+        break;
+    }
+    case SPICE_IMAGE_TYPE_BITMAP:
+    case SPICE_IMAGE_TYPE_SURFACE:
+        /* nothing */
+        break;
+    default:
+        spice_error("invalid image type");
+    }
+}
+
+void image_cache_localize_brush(ImageCache *cache, SpiceBrush *brush, SpiceImage *image_store)
+{
+    if (brush->type == SPICE_BRUSH_TYPE_PATTERN) {
+        image_cache_localize(cache, &brush->u.pattern.pat, image_store, NULL);
+    }
+}
+
+void image_cache_localize_mask(ImageCache *cache, SpiceQMask *mask, SpiceImage *image_store)
+{
+    if (mask->bitmap) {
+        image_cache_localize(cache, &mask->bitmap, image_store, NULL);
+    }
 }
