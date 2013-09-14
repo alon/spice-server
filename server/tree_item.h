@@ -56,6 +56,12 @@ struct _DrawItem {
 #define IS_DRAW_ITEM(item) ((item)->type == TREE_ITEM_TYPE_DRAWABLE)
 #define DRAW_ITEM(item) ((DrawItem*)(item))
 
+static inline int is_opaque_item(TreeItem *item)
+{
+    return item->type == TREE_ITEM_TYPE_CONTAINER ||
+        (IS_DRAW_ITEM(item) && ((DrawItem *)item)->effect == QXL_EFFECT_OPAQUE);
+}
+
 void       tree_item_dump                           (TreeItem *item);
 Shadow*    shadow_new                               (DrawItem *item, const SpicePoint *delta);
 Container* container_new                            (DrawItem *item);
