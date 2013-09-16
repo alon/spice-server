@@ -93,7 +93,11 @@ DisplayChannelClient *dcc_new(DisplayChannel *display,
                               RedClient *client, RedsStream *stream,
                               int mig_target,
                               uint32_t *common_caps, int num_common_caps,
-                              uint32_t *caps, int num_caps)
+                              uint32_t *caps, int num_caps,
+                              spice_image_compression_t image_compression,
+                              spice_wan_compression_t jpeg_state,
+                              spice_wan_compression_t zlib_glz_state)
+
 {
     DisplayChannelClient *dcc;
 
@@ -106,6 +110,9 @@ DisplayChannelClient *dcc_new(DisplayChannel *display,
 
     ring_init(&dcc->palette_cache_lru);
     dcc->palette_cache_available = CLIENT_PALETTE_CACHE_SIZE;
+    dcc->image_compression = image_compression;
+    dcc->jpeg_state = jpeg_state;
+    dcc->zlib_glz_state = zlib_glz_state;
 
     return dcc;
 }

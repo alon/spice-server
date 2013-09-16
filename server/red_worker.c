@@ -4522,8 +4522,7 @@ static inline int red_compress_image(DisplayChannelClient *dcc,
                                      compress_send_data_t* o_comp_data)
 {
     DisplayChannel *display_channel = DCC_TO_DC(dcc);
-    spice_image_compression_t image_compression =
-        display_channel->common.worker->image_compression;
+    spice_image_compression_t image_compression = dcc->image_compression;
     int quic_compress = FALSE;
 
     if ((image_compression == SPICE_IMAGE_COMPRESS_OFF) ||
@@ -4904,15 +4903,14 @@ static void fill_mask(RedChannelClient *rcc, SpiceMarshaller *m,
                       SpiceImage *mask_bitmap, Drawable *drawable)
 {
     DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
-    DisplayChannel *display = DCC_TO_DC(dcc);
 
     if (mask_bitmap && m) {
-        if (display->common.worker->image_compression != SPICE_IMAGE_COMPRESS_OFF) {
-            spice_image_compression_t save_img_comp =
-                display->common.worker->image_compression;
-            display->common.worker->image_compression = SPICE_IMAGE_COMPRESS_OFF;
+        if (dcc->image_compression != SPICE_IMAGE_COMPRESS_OFF) {
+            /* todo: pass compression argument */
+            spice_image_compression_t save_img_comp = dcc->image_compression;
+            dcc->image_compression = SPICE_IMAGE_COMPRESS_OFF;
             fill_bits(dcc, m, mask_bitmap, drawable, FALSE);
-            display->common.worker->image_compression = save_img_comp;
+            dcc->image_compression = save_img_comp;
         } else {
             fill_bits(dcc, m, mask_bitmap, drawable, FALSE);
         }
@@ -6854,7 +6852,7 @@ static void red_marshall_image(RedChannelClient *rcc, SpiceMarshaller *m, ImageI
 
     compress_send_data_t comp_send_data = {0};
 
-    comp_mode = display_channel->common.worker->image_compression;
+    comp_mode = dcc->image_compression;
 
     if (((comp_mode == SPICE_IMAGE_COMPRESS_AUTO_LZ) ||
         (comp_mode == SPICE_IMAGE_COMPRESS_AUTO_GLZ)) && !bitmap_has_extra_stride(&bitmap)) {
@@ -7937,10 +7935,10 @@ static int display_channel_handle_migrate_data(RedChannelClient *rcc, uint32_t s
 
     if (migrate_data->low_bandwidth_setting) {
         red_channel_client_ack_set_client_window(rcc, WIDE_CLIENT_ACK_WINDOW);
-        if (DCC_TO_WORKER(dcc)->jpeg_state == SPICE_WAN_COMPRESSION_AUTO) {
+        if (dcc->jpeg_state == SPICE_WAN_COMPRESSION_AUTO) {
             display_channel->enable_jpeg = TRUE;
         }
-        if (DCC_TO_WORKER(dcc)->zlib_glz_state == SPICE_WAN_COMPRESSION_AUTO) {
+        if (dcc->zlib_glz_state == SPICE_WAN_COMPRESSION_AUTO) {
             display_channel->enable_zlib_glz_wrap = TRUE;
         }
     }
@@ -8531,7 +8529,8 @@ static void handle_new_display_channel(RedWorker *worker, RedClient *client, Red
     display_channel = worker->display_channel;
     spice_info("add display channel client");
     dcc = dcc_new(display_channel, client, stream, migrate,
-                  common_caps, num_common_caps, caps, num_caps);
+                  common_caps, num_common_caps, caps, num_caps,
+                  worker->image_compression, worker->jpeg_state, worker->zlib_glz_state);
     spice_info("New display (client %p) dcc %p stream %p", client, dcc, stream);
     stream_buf_size = 32*1024;
     dcc->send_data.stream_outbuf = spice_malloc(stream_buf_size);
@@ -8543,19 +8542,19 @@ static void handle_new_display_channel(RedWorker *worker, RedClient *client, Red
                      DISPLAY_FREE_LIST_DEFAULT_SIZE * sizeof(SpiceResourceID));
     dcc->send_data.free_list.res_size = DISPLAY_FREE_LIST_DEFAULT_SIZE;
 
-    if (worker->jpeg_state == SPICE_WAN_COMPRESSION_AUTO) {
+    if (dcc->jpeg_state == SPICE_WAN_COMPRESSION_AUTO) {
         display_channel->enable_jpeg = dcc->common.is_low_bandwidth;
     } else {
-        display_channel->enable_jpeg = (worker->jpeg_state == SPICE_WAN_COMPRESSION_ALWAYS);
+        display_channel->enable_jpeg = (dcc->jpeg_state == SPICE_WAN_COMPRESSION_ALWAYS);
     }
 
     // todo: tune quality according to bandwidth
     display_channel->jpeg_quality = 85;
 
-    if (worker->zlib_glz_state == SPICE_WAN_COMPRESSION_AUTO) {
+    if (dcc->zlib_glz_state == SPICE_WAN_COMPRESSION_AUTO) {
         display_channel->enable_zlib_glz_wrap = dcc->common.is_low_bandwidth;
     } else {
-        display_channel->enable_zlib_glz_wrap = (worker->zlib_glz_state ==
+        display_channel->enable_zlib_glz_wrap = (dcc->zlib_glz_state ==
                                                  SPICE_WAN_COMPRESSION_ALWAYS);
     }
 
