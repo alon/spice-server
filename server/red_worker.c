@@ -701,15 +701,15 @@ static void drawables_init(DisplayChannel *display)
 }
 
 
-static RedDrawable *ref_red_drawable(RedDrawable *drawable)
+static RedDrawable *red_drawable_ref(RedDrawable *drawable)
 {
     drawable->refs++;
     return drawable;
 }
 
 
-static inline void put_red_drawable(RedWorker *worker, RedDrawable *red_drawable,
-                                    uint32_t group_id)
+static void red_drawable_unref(RedWorker *worker, RedDrawable *red_drawable,
+                               uint32_t group_id)
 {
     QXLReleaseInfoExt release_info_ext;
 
@@ -785,7 +785,7 @@ void display_channel_drawable_unref(DisplayChannel *display, Drawable *drawable)
         SPICE_CONTAINEROF(item, RedGlzDrawable, drawable_link)->drawable = NULL;
         ring_remove(item);
     }
-    put_red_drawable(COMMON_CHANNEL(display)->worker, drawable->red_drawable, drawable->group_id);
+    red_drawable_unref(COMMON_CHANNEL(display)->worker, drawable->red_drawable, drawable->group_id);
     drawable_free(display, drawable);
     display->drawable_count--;
 }
@@ -2626,7 +2626,7 @@ static gboolean red_process_draw(RedWorker *worker, QXLCommandExt *ext_cmd)
         goto end;
 
     drawable->tree_item.effect = red_drawable->effect;
-    drawable->red_drawable = ref_red_drawable(red_drawable);
+    drawable->red_drawable = red_drawable_ref(red_drawable);
     drawable->surface_id = red_drawable->surface_id;
     region_add(&drawable->tree_item.base.rgn, &red_drawable->bbox);
     if (red_drawable->clip.type == SPICE_CLIP_TYPE_RECTS) {
@@ -2683,7 +2683,7 @@ end:
     if (drawable != NULL)
         display_channel_drawable_unref(display, drawable);
     if (red_drawable != NULL)
-        put_red_drawable(worker, red_drawable, ext_cmd->group_id);
+        red_drawable_unref(worker, red_drawable, ext_cmd->group_id);
     return success;
 }
 
@@ -3453,7 +3453,7 @@ static RedGlzDrawable *red_display_get_glz_drawable(DisplayChannelClient *dcc, D
     ret = spice_new(RedGlzDrawable, 1);
 
     ret->dcc = dcc;
-    ret->red_drawable = ref_red_drawable(drawable->red_drawable);
+    ret->red_drawable = red_drawable_ref(drawable->red_drawable);
     ret->drawable = drawable;
     ret->group_id = drawable->group_id;
     ret->instances_count = 0;
@@ -3521,8 +3521,8 @@ void dcc_free_glz_drawable_instance(DisplayChannelClient *dcc,
         if (drawable) {
             ring_remove(&glz_drawable->drawable_link);
         }
-        put_red_drawable(worker, glz_drawable->red_drawable,
-                         glz_drawable->group_id);
+        red_drawable_unref(worker, glz_drawable->red_drawable,
+                           glz_drawable->group_id);
         worker->glz_drawable_count--;
         if (ring_item_is_linked(&glz_drawable->link)) {
             ring_remove(&glz_drawable->link);
