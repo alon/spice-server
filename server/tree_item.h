@@ -65,5 +65,7 @@ static inline int is_opaque_item(TreeItem *item)
 void       tree_item_dump                           (TreeItem *item);
 Shadow*    shadow_new                               (DrawItem *item, const SpicePoint *delta);
 Container* container_new                            (DrawItem *item);
+void       container_free                           (Container *container);
+void       container_cleanup                        (Container *container);
 
 #endif /* TREE_ITEM_H_ */

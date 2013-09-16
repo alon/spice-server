@@ -203,3 +203,30 @@ Container* container_new(DrawItem *item)
 
     return container;
 }
+
+void container_free(Container *container)
+{
+    spice_return_if_fail(ring_is_empty(&container->items));
+
+    ring_remove(&container->base.siblings_link);
+    region_destroy(&container->base.rgn);
+    free(container);
+}
+
+void container_cleanup(Container *container)
+{
+    /* visit upward, removing containers */
+    /* non-empty container get its element moving up ?? */
+    while (container && container->items.next == container->items.prev) {
+        Container *next = container->base.container;
+        if (container->items.next != &container->items) {
+            TreeItem *item = (TreeItem *)ring_get_head(&container->items);
+            spice_assert(item);
+            ring_remove(&item->siblings_link);
+            ring_add_after(&item->siblings_link, &container->base.siblings_link);
+            item->container = container->base.container;
+        }
+        container_free(container);
+        container = next;
+    }
+}

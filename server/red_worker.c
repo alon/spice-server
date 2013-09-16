@@ -805,30 +805,6 @@ static void remove_shadow(DisplayChannel *display, DrawItem *item)
     free(shadow);
 }
 
-static inline void current_remove_container(DisplayChannel *display, Container *container)
-{
-    spice_assert(ring_is_empty(&container->items));
-    ring_remove(&container->base.siblings_link);
-    region_destroy(&container->base.rgn);
-    free(container);
-}
-
-static inline void container_cleanup(DisplayChannel *display, Container *container)
-{
-    while (container && container->items.next == container->items.prev) {
-        Container *next = container->base.container;
-        if (container->items.next != &container->items) {
-            TreeItem *item = (TreeItem *)ring_get_head(&container->items);
-            spice_assert(item);
-            ring_remove(&item->siblings_link);
-            ring_add_after(&item->siblings_link, &container->base.siblings_link);
-            item->container = container->base.container;
-        }
-        current_remove_container(display, container);
-        container = next;
-    }
-}
-
 static void display_stream_trace_add_drawable(DisplayChannel *display, Drawable *item)
 {
     ItemTrace *trace;
@@ -906,7 +882,7 @@ static inline void current_remove(DisplayChannel *display, TreeItem *item)
                 continue;
             }
             ring_item = now->siblings_link.prev;
-            current_remove_container(display, container);
+            container_free(container);
         }
         if (now == item) {
             return;
@@ -2495,7 +2471,7 @@ static bool free_one_drawable(DisplayChannel *display, int force_glz_free)
     container = drawable->tree_item.base.container;
 
     current_remove_drawable(display, drawable);
-    container_cleanup(display, container);
+    container_cleanup(container);
     return TRUE;
 }
 
@@ -2997,7 +2973,7 @@ static void red_update_area_till(DisplayChannel *display, const SpiceRect *area,
         now->refs++;
         container = now->tree_item.base.container;
         current_remove_drawable(display, now);
-        container_cleanup(display, container);
+        container_cleanup(container);
         /* red_draw_drawable may call red_update_area for the surfaces 'now' depends on. Notice,
            that it is valid to call red_update_area in this case and not red_update_area_till:
            It is impossible that there was newer item then 'last' in one of the surfaces
@@ -3055,7 +3031,7 @@ static void red_update_area(DisplayChannel *display, const SpiceRect *area, int 
         now->refs++;
         container = now->tree_item.base.container;
         current_remove_drawable(display, now);
-        container_cleanup(display, container);
+        container_cleanup(container);
         red_draw_drawable(display, now);
         display_channel_drawable_unref(display, now);
     } while (now != last);
