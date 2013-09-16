@@ -113,6 +113,10 @@ DisplayChannelClient *dcc_new(DisplayChannel *display,
     dcc->image_compression = image_compression;
     dcc->jpeg_state = jpeg_state;
     dcc->zlib_glz_state = zlib_glz_state;
+    // todo: tune quality according to bandwidth
+    dcc->jpeg_quality = 85;
+
+    dcc_encoders_init(dcc);
 
     return dcc;
 }
@@ -175,7 +179,7 @@ static MonitorsConfigItem *monitors_config_item_new(RedChannel* channel,
     return mci;
 }
 
-static inline void red_monitors_config_item_add(DisplayChannelClient *dcc)
+static void red_monitors_config_item_add(DisplayChannelClient *dcc)
 {
     DisplayChannel *dc = DCC_TO_DC(dcc);
     MonitorsConfigItem *mci;
