@@ -51,10 +51,9 @@
 #define NUM_STREAMS 50
 #define NUM_SURFACES 10000
 
-#define RED_COMPRESS_BUF_SIZE (1024 * 64)
 typedef struct RedCompressBuf RedCompressBuf;
 struct RedCompressBuf {
-    uint32_t buf[RED_COMPRESS_BUF_SIZE / 4];
+    uint8_t buf[64 * 1024];
     RedCompressBuf *next;
     RedCompressBuf *send_next;
 };

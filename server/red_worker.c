@@ -3888,7 +3888,7 @@ static void glz_usr_free(GlzEncoderUsrContext *usr, void *ptr)
     free(ptr);
 }
 
-static inline int encoder_usr_more_space(EncoderData *enc_data, uint32_t **io_ptr)
+static int encoder_usr_more_space(EncoderData *enc_data, uint8_t **io_ptr)
 {
     RedCompressBuf *buf;
 
@@ -3899,37 +3899,37 @@ static inline int encoder_usr_more_space(EncoderData *enc_data, uint32_t **io_pt
     enc_data->bufs_tail = buf;
     buf->send_next = NULL;
     *io_ptr = buf->buf;
-    return sizeof(buf->buf) >> 2;
+    return sizeof(buf->buf);
 }
 
 static int quic_usr_more_space(QuicUsrContext *usr, uint32_t **io_ptr, int rows_completed)
 {
     EncoderData *usr_data = &(((QuicData *)usr)->data);
-    return encoder_usr_more_space(usr_data, io_ptr);
+    return encoder_usr_more_space(usr_data, (uint8_t **)io_ptr) / sizeof(uint32_t);
 }
 
 static int lz_usr_more_space(LzUsrContext *usr, uint8_t **io_ptr)
 {
     EncoderData *usr_data = &(((LzData *)usr)->data);
-    return (encoder_usr_more_space(usr_data, (uint32_t **)io_ptr) << 2);
+    return encoder_usr_more_space(usr_data, io_ptr);
 }
 
 static int glz_usr_more_space(GlzEncoderUsrContext *usr, uint8_t **io_ptr)
 {
     EncoderData *usr_data = &(((GlzData *)usr)->data);
-    return (encoder_usr_more_space(usr_data, (uint32_t **)io_ptr) << 2);
+    return encoder_usr_more_space(usr_data, io_ptr);
 }
 
 static int jpeg_usr_more_space(JpegEncoderUsrContext *usr, uint8_t **io_ptr)
 {
     EncoderData *usr_data = &(((JpegData *)usr)->data);
-    return (encoder_usr_more_space(usr_data, (uint32_t **)io_ptr) << 2);
+    return encoder_usr_more_space(usr_data, io_ptr);
 }
 
 static int zlib_usr_more_space(ZlibEncoderUsrContext *usr, uint8_t **io_ptr)
 {
     EncoderData *usr_data = &(((ZlibData *)usr)->data);
-    return (encoder_usr_more_space(usr_data, (uint32_t **)io_ptr) << 2);
+    return encoder_usr_more_space(usr_data, io_ptr);
 }
 
 static inline int encoder_usr_more_lines(EncoderData *enc_data, uint8_t **lines)
@@ -4495,8 +4495,8 @@ static inline int red_quic_compress_image(DisplayChannelClient *dcc, SpiceImage 
         stride = -src->stride;
     }
     size = quic_encode(quic, type, src->x, src->y, NULL, 0, stride,
-                       quic_data->data.bufs_head->buf,
-                       sizeof(quic_data->data.bufs_head->buf) >> 2);
+                       (uint32_t*)quic_data->data.bufs_head->buf,
+                       sizeof(quic_data->data.bufs_head->buf) / sizeof(uint32_t));
 
     // the compressed buffer is bigger than the original data
     if ((size << 2) > (src->y * src->stride)) {
