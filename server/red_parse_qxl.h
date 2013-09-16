@@ -35,7 +35,7 @@ typedef struct RedDrawable {
     SpiceRect bbox;
     SpiceClip clip;
     uint32_t mm_time;
-    int32_t surfaces_dest[3];
+    int32_t surface_deps[3];
     SpiceRect surfaces_rects[3];
     union {
         SpiceFill fill;
