@@ -117,6 +117,8 @@ libspice_server_la_SOURCES =			\
 	utils.h					\
 	stream.c					\
 	stream.h					\
+	dcc_encoders.c					\
+	dcc_encoders.h					\
 	$(NULL)
 
 if SUPPORT_GL

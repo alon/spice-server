@@ -51,7 +51,6 @@
 #include <spice/qxl_dev.h>
 #include "common/lz.h"
 #include "common/marshaller.h"
-#include "common/quic.h"
 #include "common/rect.h"
 #include "common/region.h"
 #include "common/ring.h"
@@ -83,7 +82,6 @@
 #define FPS_TEST_INTERVAL 1
 #define MAX_FPS 30
 
-#define ZLIB_DEFAULT_COMPRESSION_LEVEL 3
 #define MIN_GLZ_SIZE_FOR_ZLIB 100
 
 #define VALIDATE_SURFACE_RET(worker, surface_id) \
@@ -238,59 +236,6 @@ typedef struct ImageItem {
     uint8_t data[0];
 } ImageItem;
 
-typedef struct {
-    QuicUsrContext usr;
-    EncoderData data;
-} QuicData;
-
-typedef struct {
-    LzUsrContext usr;
-    EncoderData data;
-} LzData;
-
-typedef struct {
-    JpegEncoderUsrContext usr;
-    EncoderData data;
-} JpegData;
-
-typedef struct {
-    ZlibEncoderUsrContext usr;
-    EncoderData data;
-} ZlibData;
-
-/**********************************/
-/* LZ dictionary related entities */
-/**********************************/
-#define MAX_GLZ_DRAWABLE_INSTANCES 2
-
-typedef struct RedGlzDrawable RedGlzDrawable;
-
-/* for each qxl drawable, there may be several instances of lz drawables */
-/* TODO - reuse this stuff for the top level. I just added a second level of multiplicity
- * at the Drawable by keeping a ring, so:
- * Drawable -> (ring of) RedGlzDrawable -> (up to 2) GlzDrawableInstanceItem
- * and it should probably (but need to be sure...) be
- * Drawable -> ring of GlzDrawableInstanceItem.
- */
-typedef struct GlzDrawableInstanceItem {
-    RingItem glz_link;
-    RingItem free_link;
-    GlzEncDictImageContext *glz_instance;
-    RedGlzDrawable         *red_glz_drawable;
-} GlzDrawableInstanceItem;
-
-struct RedGlzDrawable {
-    RingItem link;    // ordered by the time it was encoded
-    RingItem drawable_link;
-    RedDrawable *red_drawable;
-    Drawable    *drawable;
-    uint32_t     group_id;
-    GlzDrawableInstanceItem instances_pool[MAX_GLZ_DRAWABLE_INSTANCES];
-    Ring instances;
-    uint8_t instances_count;
-    DisplayChannelClient *dcc;
-};
-
 pthread_mutex_t glz_dictionary_list_lock = PTHREAD_MUTEX_INITIALIZER;
 Ring glz_dictionary_list = {&glz_dictionary_list, &glz_dictionary_list};
 
@@ -316,15 +261,6 @@ typedef struct RedWorker {
     spice_image_compression_t image_compression;
     spice_wan_compression_t jpeg_state;
     spice_wan_compression_t zlib_glz_state;
-
-    QuicData quic_data;
-    QuicContext *quic;
-    LzData lz_data;
-    LzContext  *lz;
-    JpegData jpeg_data;
-    JpegEncoderContext *jpeg;
-    ZlibData zlib_data;
-    ZlibEncoder *zlib;
 
     uint32_t process_commands_generation;
 #ifdef RED_WORKER_STAT
@@ -374,7 +310,7 @@ static void red_freeze_glz(DisplayChannelClient *dcc);
 static void display_channel_push_release(DisplayChannelClient *dcc, uint8_t type, uint64_t id,
                                          uint64_t* sync_data);
 static int red_display_free_some_independent_glz_drawables(DisplayChannelClient *dcc);
-static void red_display_free_glz_drawable(DisplayChannelClient *dcc, RedGlzDrawable *drawable);
+static void dcc_free_glz_drawable(DisplayChannelClient *dcc, RedGlzDrawable *drawable);
 static ImageItem *red_add_surface_area_image(DisplayChannelClient *dcc, int surface_id,
                                              SpiceRect *area, PipeItem *pos, int can_lossy);
 static void display_channel_client_release_item_before_push(DisplayChannelClient *dcc,
@@ -2552,7 +2488,7 @@ static bool free_one_drawable(DisplayChannel *display, int force_glz_free)
         RingItem *glz_item, *next_item;
         RedGlzDrawable *glz;
         DRAWABLE_FOREACH_GLZ_SAFE(drawable, glz_item, next_item, glz) {
-            red_display_free_glz_drawable(glz->dcc, glz);
+            dcc_free_glz_drawable(glz->dcc, glz);
         }
     }
     red_draw_drawable(display, drawable);
@@ -3455,31 +3391,6 @@ static void red_push_surface_image(DisplayChannelClient *dcc, int surface_id)
     red_channel_client_push(RED_CHANNEL_CLIENT(dcc));
 }
 
-static RedCompressBuf *compress_buf_new(void)
-{
-    return g_slice_new(RedCompressBuf);
-}
-
-static void compress_buf_free(RedCompressBuf *buf)
-{
-    g_slice_free(RedCompressBuf, buf);
-}
-
-static void marshaller_add_compressed(SpiceMarshaller *m,
-                                      RedCompressBuf *comp_buf, size_t size)
-{
-    size_t max = size;
-    size_t now;
-    do {
-        spice_return_if_fail(comp_buf);
-        now = MIN(sizeof(comp_buf->buf), max);
-        max -= now;
-        spice_marshaller_add_ref_full(m, (uint8_t*)comp_buf->buf, now,
-                                      (spice_marshaller_item_free_func)compress_buf_free, NULL);
-        comp_buf = comp_buf->send_next;
-    } while (max);
-}
-
 static inline void fill_rects_clip(SpiceMarshaller *m, SpiceClipRects *data)
 {
     int i;
@@ -3579,8 +3490,8 @@ static GlzDrawableInstanceItem *red_display_add_glz_drawable_instance(RedGlzDraw
    it is not used by Drawable).
    NOTE - 1) can be called only by the display channel that created the drawable
           2) it is assumed that the instance was already removed from the dictionary*/
-static void red_display_free_glz_drawable_instance(DisplayChannelClient *dcc,
-                                                   GlzDrawableInstanceItem *glz_drawable_instance)
+void dcc_free_glz_drawable_instance(DisplayChannelClient *dcc,
+                                    GlzDrawableInstanceItem *glz_drawable_instance)
 {
     DisplayChannel *display_channel = DCC_TO_DC(dcc);
     RedWorker *worker = display_channel->common.worker;
@@ -3632,7 +3543,7 @@ static void red_display_handle_glz_drawables_to_free(DisplayChannelClient* dcc)
         GlzDrawableInstanceItem *drawable_instance = SPICE_CONTAINEROF(ring_link,
                                                                  GlzDrawableInstanceItem,
                                                                  free_link);
-        red_display_free_glz_drawable_instance(dcc, drawable_instance);
+        dcc_free_glz_drawable_instance(dcc, drawable_instance);
     }
     pthread_mutex_unlock(&dcc->glz_drawables_inst_to_free_lock);
 }
@@ -3643,14 +3554,14 @@ static void red_display_handle_glz_drawables_to_free(DisplayChannelClient* dcc)
  * if possible.
  * NOTE - the caller should prevent encoding using the dictionary during this operation
  */
-static void red_display_free_glz_drawable(DisplayChannelClient *dcc, RedGlzDrawable *drawable)
+static void dcc_free_glz_drawable(DisplayChannelClient *dcc, RedGlzDrawable *drawable)
 {
     RingItem *head_instance = ring_get_head(&drawable->instances);
     int cont = (head_instance != NULL);
 
     while (cont) {
         if (drawable->instances_count == 1) {
-            /* Last instance: red_display_free_glz_drawable_instance will free the drawable */
+            /* Last instance: dcc_free_glz_drawable_instance will free the drawable */
             cont = FALSE;
         }
         GlzDrawableInstanceItem *instance = SPICE_CONTAINEROF(head_instance,
@@ -3662,7 +3573,7 @@ static void red_display_free_glz_drawable(DisplayChannelClient *dcc, RedGlzDrawa
                                             instance->glz_instance,
                                             &dcc->glz_data.usr);
         }
-        red_display_free_glz_drawable_instance(dcc, instance);
+        dcc_free_glz_drawable_instance(dcc, instance);
 
         if (cont) {
             head_instance = ring_get_head(&drawable->instances);
@@ -3687,7 +3598,7 @@ static void red_display_client_clear_glz_drawables(DisplayChannelClient *dcc)
         RedGlzDrawable *drawable = SPICE_CONTAINEROF(ring_link, RedGlzDrawable, link);
         // no need to lock the to_free list, since we assured no other thread is encoding and
         // thus not other thread access the to_free list of the channel
-        red_display_free_glz_drawable(dcc, drawable);
+        dcc_free_glz_drawable(dcc, drawable);
     }
     pthread_rwlock_unlock(&glz_dict->encode_lock);
 }
@@ -3723,329 +3634,11 @@ static int red_display_free_some_independent_glz_drawables(DisplayChannelClient 
         RedGlzDrawable *glz_drawable = SPICE_CONTAINEROF(ring_link, RedGlzDrawable, link);
         ring_link = ring_next(&dcc->glz_drawables, ring_link);
         if (!glz_drawable->drawable) {
-            red_display_free_glz_drawable(dcc, glz_drawable);
+            dcc_free_glz_drawable(dcc, glz_drawable);
             n++;
         }
     }
     return n;
-}
-
-/******************************************************
- *              Encoders callbacks
-*******************************************************/
-static SPICE_GNUC_NORETURN SPICE_GNUC_PRINTF(2, 3) void
-quic_usr_error(QuicUsrContext *usr, const char *fmt, ...)
-{
-    EncoderData *usr_data = &(((QuicData *)usr)->data);
-    va_list ap;
-
-    va_start(ap, fmt);
-    vsnprintf(usr_data->message_buf, sizeof(usr_data->message_buf), fmt, ap);
-    va_end(ap);
-    spice_critical("%s", usr_data->message_buf);
-
-    longjmp(usr_data->jmp_env, 1);
-}
-
-static SPICE_GNUC_NORETURN SPICE_GNUC_PRINTF(2, 3) void
-lz_usr_error(LzUsrContext *usr, const char *fmt, ...)
-{
-    EncoderData *usr_data = &(((LzData *)usr)->data);
-    va_list ap;
-
-    va_start(ap, fmt);
-    vsnprintf(usr_data->message_buf, sizeof(usr_data->message_buf), fmt, ap);
-    va_end(ap);
-    spice_critical("%s", usr_data->message_buf);
-
-    longjmp(usr_data->jmp_env, 1);
-}
-
-static SPICE_GNUC_PRINTF(2, 3) void glz_usr_error(GlzEncoderUsrContext *usr, const char *fmt, ...)
-{
-    EncoderData *usr_data = &(((GlzData *)usr)->data);
-    va_list ap;
-
-    va_start(ap, fmt);
-    vsnprintf(usr_data->message_buf, sizeof(usr_data->message_buf), fmt, ap);
-    va_end(ap);
-
-    spice_critical("%s", usr_data->message_buf); // if global lz fails in the middle
-                                        // the consequences are not predictable since the window
-                                        // can turn to be unsynchronized between the server and
-                                        // and the client
-}
-
-static SPICE_GNUC_PRINTF(2, 3) void quic_usr_warn(QuicUsrContext *usr, const char *fmt, ...)
-{
-    EncoderData *usr_data = &(((QuicData *)usr)->data);
-    va_list ap;
-
-    va_start(ap, fmt);
-    vsnprintf(usr_data->message_buf, sizeof(usr_data->message_buf), fmt, ap);
-    va_end(ap);
-    spice_warning("%s", usr_data->message_buf);
-}
-
-static SPICE_GNUC_PRINTF(2, 3) void lz_usr_warn(LzUsrContext *usr, const char *fmt, ...)
-{
-    EncoderData *usr_data = &(((LzData *)usr)->data);
-    va_list ap;
-
-    va_start(ap, fmt);
-    vsnprintf(usr_data->message_buf, sizeof(usr_data->message_buf), fmt, ap);
-    va_end(ap);
-    spice_warning("%s", usr_data->message_buf);
-}
-
-static SPICE_GNUC_PRINTF(2, 3) void glz_usr_warn(GlzEncoderUsrContext *usr, const char *fmt, ...)
-{
-    EncoderData *usr_data = &(((GlzData *)usr)->data);
-    va_list ap;
-
-    va_start(ap, fmt);
-    vsnprintf(usr_data->message_buf, sizeof(usr_data->message_buf), fmt, ap);
-    va_end(ap);
-    spice_warning("%s", usr_data->message_buf);
-}
-
-static void *quic_usr_malloc(QuicUsrContext *usr, int size)
-{
-    return spice_malloc(size);
-}
-
-static void *lz_usr_malloc(LzUsrContext *usr, int size)
-{
-    return spice_malloc(size);
-}
-
-static void *glz_usr_malloc(GlzEncoderUsrContext *usr, int size)
-{
-    return spice_malloc(size);
-}
-
-static void quic_usr_free(QuicUsrContext *usr, void *ptr)
-{
-    free(ptr);
-}
-
-static void lz_usr_free(LzUsrContext *usr, void *ptr)
-{
-    free(ptr);
-}
-
-static void glz_usr_free(GlzEncoderUsrContext *usr, void *ptr)
-{
-    free(ptr);
-}
-
-static int encoder_usr_more_space(EncoderData *enc_data, uint8_t **io_ptr)
-{
-    RedCompressBuf *buf;
-
-    buf = compress_buf_new();
-    enc_data->bufs_tail->send_next = buf;
-    enc_data->bufs_tail = buf;
-    buf->send_next = NULL;
-    *io_ptr = buf->buf;
-    return sizeof(buf->buf);
-}
-
-static int quic_usr_more_space(QuicUsrContext *usr, uint32_t **io_ptr, int rows_completed)
-{
-    EncoderData *usr_data = &(((QuicData *)usr)->data);
-    return encoder_usr_more_space(usr_data, (uint8_t **)io_ptr) / sizeof(uint32_t);
-}
-
-static int lz_usr_more_space(LzUsrContext *usr, uint8_t **io_ptr)
-{
-    EncoderData *usr_data = &(((LzData *)usr)->data);
-    return encoder_usr_more_space(usr_data, io_ptr);
-}
-
-static int glz_usr_more_space(GlzEncoderUsrContext *usr, uint8_t **io_ptr)
-{
-    EncoderData *usr_data = &(((GlzData *)usr)->data);
-    return encoder_usr_more_space(usr_data, io_ptr);
-}
-
-static int jpeg_usr_more_space(JpegEncoderUsrContext *usr, uint8_t **io_ptr)
-{
-    EncoderData *usr_data = &(((JpegData *)usr)->data);
-    return encoder_usr_more_space(usr_data, io_ptr);
-}
-
-static int zlib_usr_more_space(ZlibEncoderUsrContext *usr, uint8_t **io_ptr)
-{
-    EncoderData *usr_data = &(((ZlibData *)usr)->data);
-    return encoder_usr_more_space(usr_data, io_ptr);
-}
-
-static inline int encoder_usr_more_lines(EncoderData *enc_data, uint8_t **lines)
-{
-    struct SpiceChunk *chunk;
-
-    if (enc_data->u.lines_data.reverse) {
-        if (!(enc_data->u.lines_data.next >= 0)) {
-            return 0;
-        }
-    } else {
-        if (!(enc_data->u.lines_data.next < enc_data->u.lines_data.chunks->num_chunks)) {
-            return 0;
-        }
-    }
-
-    chunk = &enc_data->u.lines_data.chunks->chunk[enc_data->u.lines_data.next];
-    if (chunk->len % enc_data->u.lines_data.stride) {
-        return 0;
-    }
-
-    if (enc_data->u.lines_data.reverse) {
-        enc_data->u.lines_data.next--;
-        *lines = chunk->data + chunk->len - enc_data->u.lines_data.stride;
-    } else {
-        enc_data->u.lines_data.next++;
-        *lines = chunk->data;
-    }
-
-    return chunk->len / enc_data->u.lines_data.stride;
-}
-
-static int quic_usr_more_lines(QuicUsrContext *usr, uint8_t **lines)
-{
-    EncoderData *usr_data = &(((QuicData *)usr)->data);
-    return encoder_usr_more_lines(usr_data, lines);
-}
-
-static int lz_usr_more_lines(LzUsrContext *usr, uint8_t **lines)
-{
-    EncoderData *usr_data = &(((LzData *)usr)->data);
-    return encoder_usr_more_lines(usr_data, lines);
-}
-
-static int glz_usr_more_lines(GlzEncoderUsrContext *usr, uint8_t **lines)
-{
-    EncoderData *usr_data = &(((GlzData *)usr)->data);
-    return encoder_usr_more_lines(usr_data, lines);
-}
-
-static int jpeg_usr_more_lines(JpegEncoderUsrContext *usr, uint8_t **lines)
-{
-    EncoderData *usr_data = &(((JpegData *)usr)->data);
-    return encoder_usr_more_lines(usr_data, lines);
-}
-
-static int zlib_usr_more_input(ZlibEncoderUsrContext *usr, uint8_t** input)
-{
-    EncoderData *usr_data = &(((ZlibData *)usr)->data);
-    int buf_size;
-
-    if (!usr_data->u.compressed_data.next) {
-        spice_assert(usr_data->u.compressed_data.size_left == 0);
-        return 0;
-    }
-
-    *input = (uint8_t*)usr_data->u.compressed_data.next->buf;
-    buf_size = MIN(sizeof(usr_data->u.compressed_data.next->buf),
-                   usr_data->u.compressed_data.size_left);
-
-    usr_data->u.compressed_data.next = usr_data->u.compressed_data.next->send_next;
-    usr_data->u.compressed_data.size_left -= buf_size;
-    return buf_size;
-}
-
-static void glz_usr_free_image(GlzEncoderUsrContext *usr, GlzUsrImageContext *image)
-{
-    GlzData *lz_data = (GlzData *)usr;
-    GlzDrawableInstanceItem *glz_drawable_instance = (GlzDrawableInstanceItem *)image;
-    DisplayChannelClient *drawable_cc = glz_drawable_instance->red_glz_drawable->dcc;
-    DisplayChannelClient *this_cc = SPICE_CONTAINEROF(lz_data, DisplayChannelClient, glz_data);
-    if (this_cc == drawable_cc) {
-        red_display_free_glz_drawable_instance(drawable_cc, glz_drawable_instance);
-    } else {
-        /* The glz dictionary is shared between all DisplayChannelClient
-         * instances that belong to the same client, and glz_usr_free_image
-         * can be called by the dictionary code
-         * (glz_dictionary_window_remove_head). Thus this function can be
-         * called from any DisplayChannelClient thread, hence the need for
-         * this check.
-         */
-        pthread_mutex_lock(&drawable_cc->glz_drawables_inst_to_free_lock);
-        ring_add_before(&glz_drawable_instance->free_link,
-                        &drawable_cc->glz_drawables_inst_to_free);
-        pthread_mutex_unlock(&drawable_cc->glz_drawables_inst_to_free_lock);
-    }
-}
-
-static inline void red_init_quic(RedWorker *worker)
-{
-    worker->quic_data.usr.error = quic_usr_error;
-    worker->quic_data.usr.warn = quic_usr_warn;
-    worker->quic_data.usr.info = quic_usr_warn;
-    worker->quic_data.usr.malloc = quic_usr_malloc;
-    worker->quic_data.usr.free = quic_usr_free;
-    worker->quic_data.usr.more_space = quic_usr_more_space;
-    worker->quic_data.usr.more_lines = quic_usr_more_lines;
-
-    worker->quic = quic_create(&worker->quic_data.usr);
-
-    if (!worker->quic) {
-        spice_critical("create quic failed");
-    }
-}
-
-static inline void red_init_lz(RedWorker *worker)
-{
-    worker->lz_data.usr.error = lz_usr_error;
-    worker->lz_data.usr.warn = lz_usr_warn;
-    worker->lz_data.usr.info = lz_usr_warn;
-    worker->lz_data.usr.malloc = lz_usr_malloc;
-    worker->lz_data.usr.free = lz_usr_free;
-    worker->lz_data.usr.more_space = lz_usr_more_space;
-    worker->lz_data.usr.more_lines = lz_usr_more_lines;
-
-    worker->lz = lz_create(&worker->lz_data.usr);
-
-    if (!worker->lz) {
-        spice_critical("create lz failed");
-    }
-}
-
-/* TODO: split off to DisplayChannel? avoid just copying those cb pointers */
-static inline void red_display_init_glz_data(DisplayChannelClient *dcc)
-{
-    dcc->glz_data.usr.error = glz_usr_error;
-    dcc->glz_data.usr.warn = glz_usr_warn;
-    dcc->glz_data.usr.info = glz_usr_warn;
-    dcc->glz_data.usr.malloc = glz_usr_malloc;
-    dcc->glz_data.usr.free = glz_usr_free;
-    dcc->glz_data.usr.more_space = glz_usr_more_space;
-    dcc->glz_data.usr.more_lines = glz_usr_more_lines;
-    dcc->glz_data.usr.free_image = glz_usr_free_image;
-}
-
-static inline void red_init_jpeg(RedWorker *worker)
-{
-    worker->jpeg_data.usr.more_space = jpeg_usr_more_space;
-    worker->jpeg_data.usr.more_lines = jpeg_usr_more_lines;
-
-    worker->jpeg = jpeg_encoder_create(&worker->jpeg_data.usr);
-
-    if (!worker->jpeg) {
-        spice_critical("create jpeg encoder failed");
-    }
-}
-
-static inline void red_init_zlib(RedWorker *worker)
-{
-    worker->zlib_data.usr.more_space = zlib_usr_more_space;
-    worker->zlib_data.usr.more_input = zlib_usr_more_input;
-
-    worker->zlib = zlib_encoder_create(&worker->zlib_data.usr, ZLIB_DEFAULT_COMPRESSION_LEVEL);
-
-    if (!worker->zlib) {
-        spice_critical("create zlib encoder failed");
-    }
 }
 
 typedef struct compress_send_data_t {
@@ -4060,7 +3653,6 @@ static inline int red_glz_compress_image(DisplayChannelClient *dcc,
                                          compress_send_data_t* o_comp_data)
 {
     DisplayChannel *display_channel = DCC_TO_DC(dcc);
-    RedWorker *worker = display_channel->common.worker;
 #ifdef COMPRESS_STAT
     stat_time_t start_time = stat_now(worker);
 #endif
@@ -4075,12 +3667,6 @@ static inline int red_glz_compress_image(DisplayChannelClient *dcc,
 
     glz_data->data.bufs_tail = compress_buf_new();
     glz_data->data.bufs_head = glz_data->data.bufs_tail;
-
-    if (!glz_data->data.bufs_head) {
-        return FALSE;
-    }
-
-    glz_data->data.bufs_head->send_next = NULL;
     glz_data->data.dcc = dcc;
 
     glz_drawable = red_display_get_glz_drawable(dcc, drawable);
@@ -4090,7 +3676,7 @@ static inline int red_glz_compress_image(DisplayChannelClient *dcc,
     glz_data->data.u.lines_data.stride = src->stride;
     glz_data->data.u.lines_data.next = 0;
     glz_data->data.u.lines_data.reverse = 0;
-    glz_data->usr.more_lines = glz_usr_more_lines;
+    /* fixme: remove? glz_data->usr.more_lines = glz_usr_more_lines; */
 
     glz_size = glz_encode(dcc->glz, type, src->x, src->y,
                           (src->flags & SPICE_BITMAP_FLAGS_TOP_DOWN), NULL, 0,
@@ -4107,24 +3693,17 @@ static inline int red_glz_compress_image(DisplayChannelClient *dcc,
 #ifdef COMPRESS_STAT
     start_time = stat_now(worker);
 #endif
-    zlib_data = &worker->zlib_data;
+    zlib_data = &dcc->zlib_data;
 
     zlib_data->data.bufs_tail = compress_buf_new();
     zlib_data->data.bufs_head = zlib_data->data.bufs_tail;
-
-    if (!zlib_data->data.bufs_head) {
-        spice_warning("failed to allocate zlib compress buffer");
-        goto glz;
-    }
-
-    zlib_data->data.bufs_head->send_next = NULL;
     zlib_data->data.dcc = dcc;
 
     zlib_data->data.u.compressed_data.next = glz_data->data.bufs_head;
     zlib_data->data.u.compressed_data.size_left = glz_size;
 
-    zlib_size = zlib_encode(worker->zlib, display_channel->zlib_level,
-                            glz_size, zlib_data->data.bufs_head->buf,
+    zlib_size = zlib_encode(dcc->zlib, dcc->zlib_level,
+                            glz_size, (uint8_t*)zlib_data->data.bufs_head->buf,
                             sizeof(zlib_data->data.bufs_head->buf));
 
     // the compressed buffer is bigger than the original data
@@ -4160,10 +3739,8 @@ static inline int red_lz_compress_image(DisplayChannelClient *dcc,
                                         SpiceImage *dest, SpiceBitmap *src,
                                         compress_send_data_t* o_comp_data, uint32_t group_id)
 {
-    DisplayChannel *display_channel = DCC_TO_DC(dcc);
-    RedWorker *worker = display_channel->common.worker;
-    LzData *lz_data = &worker->lz_data;
-    LzContext *lz = worker->lz;
+    LzData *lz_data = &dcc->lz_data;
+    LzContext *lz = dcc->lz;
     LzImageType type = MAP_BITMAP_FMT_TO_LZ_IMAGE_TYPE[src->format];
     int size;            // size of the compressed data
 
@@ -4173,12 +3750,6 @@ static inline int red_lz_compress_image(DisplayChannelClient *dcc,
 
     lz_data->data.bufs_tail = compress_buf_new();
     lz_data->data.bufs_head = lz_data->data.bufs_tail;
-
-    if (!lz_data->data.bufs_head) {
-        return FALSE;
-    }
-
-    lz_data->data.bufs_head->send_next = NULL;
     lz_data->data.dcc = dcc;
 
     if (setjmp(lz_data->data.jmp_env)) {
@@ -4194,7 +3765,7 @@ static inline int red_lz_compress_image(DisplayChannelClient *dcc,
     lz_data->data.u.lines_data.stride = src->stride;
     lz_data->data.u.lines_data.next = 0;
     lz_data->data.u.lines_data.reverse = 0;
-    lz_data->usr.more_lines = lz_usr_more_lines;
+    /* fixme: remove? lz_data->usr.more_lines = lz_usr_more_lines; */
 
     size = lz_encode(lz, type, src->x, src->y,
                      !!(src->flags & SPICE_BITMAP_FLAGS_TOP_DOWN),
@@ -4238,12 +3809,10 @@ static int red_jpeg_compress_image(DisplayChannelClient *dcc, SpiceImage *dest,
                                    SpiceBitmap *src, compress_send_data_t* o_comp_data,
                                    uint32_t group_id)
 {
-    DisplayChannel *display_channel = DCC_TO_DC(dcc);
-    RedWorker *worker = display_channel->common.worker;
-    JpegData *jpeg_data = &worker->jpeg_data;
-    LzData *lz_data = &worker->lz_data;
-    JpegEncoderContext *jpeg = worker->jpeg;
-    LzContext *lz = worker->lz;
+    JpegData *jpeg_data = &dcc->jpeg_data;
+    LzData *lz_data = &dcc->lz_data;
+    JpegEncoderContext *jpeg = dcc->jpeg;
+    LzContext *lz = dcc->lz;
     volatile JpegEncoderImageType jpeg_in_type;
     int jpeg_size = 0;
     volatile int has_alpha = FALSE;
@@ -4276,13 +3845,6 @@ static int red_jpeg_compress_image(DisplayChannelClient *dcc, SpiceImage *dest,
 
     jpeg_data->data.bufs_tail = compress_buf_new();
     jpeg_data->data.bufs_head = jpeg_data->data.bufs_tail;
-
-    if (!jpeg_data->data.bufs_head) {
-        spice_warning("failed to allocate compress buffer");
-        return FALSE;
-    }
-
-    jpeg_data->data.bufs_head->send_next = NULL;
     jpeg_data->data.dcc = dcc;
 
     if (setjmp(jpeg_data->data.jmp_env)) {
@@ -4300,7 +3862,7 @@ static int red_jpeg_compress_image(DisplayChannelClient *dcc, SpiceImage *dest,
 
     jpeg_data->data.u.lines_data.chunks = src->data;
     jpeg_data->data.u.lines_data.stride = src->stride;
-    jpeg_data->usr.more_lines = jpeg_usr_more_lines;
+    /* fixme: remove? jpeg_data->usr.more_lines = jpeg_usr_more_lines; */
     if ((src->flags & SPICE_BITMAP_FLAGS_TOP_DOWN)) {
         jpeg_data->data.u.lines_data.next = 0;
         jpeg_data->data.u.lines_data.reverse = 0;
@@ -4310,7 +3872,7 @@ static int red_jpeg_compress_image(DisplayChannelClient *dcc, SpiceImage *dest,
         jpeg_data->data.u.lines_data.reverse = 1;
         stride = -src->stride;
     }
-    jpeg_size = jpeg_encode(jpeg, display_channel->jpeg_quality, jpeg_in_type,
+    jpeg_size = jpeg_encode(jpeg, dcc->jpeg_quality, jpeg_in_type,
                             src->x, src->y, NULL,
                             0, stride, jpeg_data->data.bufs_head->buf,
                             sizeof(jpeg_data->data.bufs_head->buf));
@@ -4346,7 +3908,7 @@ static int red_jpeg_compress_image(DisplayChannelClient *dcc, SpiceImage *dest,
     lz_data->data.u.lines_data.stride = src->stride;
     lz_data->data.u.lines_data.next = 0;
     lz_data->data.u.lines_data.reverse = 0;
-    lz_data->usr.more_lines = lz_usr_more_lines;
+    /* fixme: remove? lz_data->usr.more_lines = lz_usr_more_lines; */
 
     alpha_lz_size = lz_encode(lz, LZ_IMAGE_TYPE_XXXA, src->x, src->y,
                                !!(src->flags & SPICE_BITMAP_FLAGS_TOP_DOWN),
@@ -4380,10 +3942,8 @@ static inline int red_quic_compress_image(DisplayChannelClient *dcc, SpiceImage 
                                           SpiceBitmap *src, compress_send_data_t* o_comp_data,
                                           uint32_t group_id)
 {
-    DisplayChannel *display_channel = DCC_TO_DC(dcc);
-    RedWorker *worker = display_channel->common.worker;
-    QuicData *quic_data = &worker->quic_data;
-    QuicContext *quic = worker->quic;
+    QuicData *quic_data = &dcc->quic_data;
+    QuicContext *quic = dcc->quic;
     volatile QuicImageType type;
     int size, stride;
 
@@ -4410,7 +3970,6 @@ static inline int red_quic_compress_image(DisplayChannelClient *dcc, SpiceImage 
 
     quic_data->data.bufs_tail = compress_buf_new();
     quic_data->data.bufs_head = quic_data->data.bufs_tail;
-    quic_data->data.bufs_head->send_next = NULL;
     quic_data->data.dcc = dcc;
 
     if (setjmp(quic_data->data.jmp_env)) {
@@ -4428,7 +3987,7 @@ static inline int red_quic_compress_image(DisplayChannelClient *dcc, SpiceImage 
 
     quic_data->data.u.lines_data.chunks = src->data;
     quic_data->data.u.lines_data.stride = src->stride;
-    quic_data->usr.more_lines = quic_usr_more_lines;
+    /* fixme: remove? quic_data->usr.more_lines = quic_usr_more_lines; */
     if ((src->flags & SPICE_BITMAP_FLAGS_TOP_DOWN)) {
         quic_data->data.u.lines_data.next = 0;
         quic_data->data.u.lines_data.reverse = 0;
@@ -8474,8 +8033,6 @@ static void handle_new_display_channel(RedWorker *worker, RedClient *client, Red
     stream_buf_size = 32*1024;
     dcc->send_data.stream_outbuf = spice_malloc(stream_buf_size);
     dcc->send_data.stream_outbuf_size = stream_buf_size;
-    red_display_init_glz_data(dcc);
-
     dcc->send_data.free_list.res =
         spice_malloc(sizeof(SpiceResourceList) +
                      DISPLAY_FREE_LIST_DEFAULT_SIZE * sizeof(SpiceResourceID));
@@ -8486,9 +8043,6 @@ static void handle_new_display_channel(RedWorker *worker, RedClient *client, Red
     } else {
         display_channel->enable_jpeg = (dcc->jpeg_state == SPICE_WAN_COMPRESSION_ALWAYS);
     }
-
-    // todo: tune quality according to bandwidth
-    display_channel->jpeg_quality = 85;
 
     if (dcc->zlib_glz_state == SPICE_WAN_COMPRESSION_AUTO) {
         display_channel->enable_zlib_glz_wrap = dcc->common.is_low_bandwidth;
@@ -8502,8 +8056,6 @@ static void handle_new_display_channel(RedWorker *worker, RedClient *client, Red
 
     guest_set_client_capabilities(worker);
 
-    // todo: tune level according to bandwidth
-    display_channel->zlib_level = ZLIB_DEFAULT_COMPRESSION_LEVEL;
     dcc_init_stream_agents(dcc);
     on_new_display_channel_client(dcc);
 }
@@ -9577,10 +9129,6 @@ RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher)
 
     spice_warn_if(init_info.n_surfaces > NUM_SURFACES);
 
-    red_init_quic(worker);
-    red_init_lz(worker);
-    red_init_jpeg(worker);
-    red_init_zlib(worker);
     worker->timeout = -1;
     worker->set_client_capabilities_pending = TRUE;
 
