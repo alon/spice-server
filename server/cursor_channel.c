@@ -207,7 +207,7 @@ static void put_cursor_pipe_item(CursorChannelClient *ccc, CursorPipeItem *pipe_
         return;
     }
 
-    spice_assert(!pipe_item_is_linked(&pipe_item->base));
+    spice_return_if_fail(!pipe_item_is_linked(&pipe_item->base));
 
     cursor_item_unref(pipe_item->cursor_item);
     free(pipe_item);
@@ -265,7 +265,7 @@ static void red_marshall_cursor_init(RedChannelClient *rcc, SpiceMarshaller *bas
     SpiceMsgCursorInit msg;
     AddBufInfo info;
 
-    spice_assert(rcc);
+    spice_return_if_fail(rcc);
     cursor = SPICE_CONTAINEROF(rcc->channel, CursorChannel, common.base);
 
     red_channel_client_init_send_data(rcc, SPICE_MSG_CURSOR_INIT, NULL);
@@ -399,7 +399,7 @@ static void cursor_channel_release_item(RedChannelClient *rcc, PipeItem *item, i
 {
     CursorChannelClient *ccc = RCC_TO_CCC(rcc);
 
-    spice_assert(item);
+    spice_return_if_fail(item);
 
     if (item_pushed) {
         cursor_channel_client_release_item_after_push(ccc, item);
