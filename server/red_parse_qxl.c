@@ -948,7 +948,7 @@ static int red_get_native_drawable(RedMemSlotInfo *slots, int group_id,
     red->surface_id       = qxl->surface_id;
 
     for (i = 0; i < 3; i++) {
-        red->surfaces_dest[i] = qxl->surfaces_dest[i];
+        red->surface_deps[i] = qxl->surfaces_dest[i];
         red_get_rect_ptr(&red->surfaces_rects[i], &qxl->surfaces_rects[i]);
     }
 
@@ -1030,9 +1030,9 @@ static int red_get_compat_drawable(RedMemSlotInfo *slots, int group_id,
     red->self_bitmap = (qxl->bitmap_offset != 0);
     red_get_rect_ptr(&red->self_bitmap_area, &qxl->bitmap_area);
 
-    red->surfaces_dest[0] = -1;
-    red->surfaces_dest[1] = -1;
-    red->surfaces_dest[2] = -1;
+    red->surface_deps[0] = -1;
+    red->surface_deps[1] = -1;
+    red->surface_deps[2] = -1;
 
     red->type = qxl->type;
     switch (red->type) {
@@ -1052,7 +1052,7 @@ static int red_get_compat_drawable(RedMemSlotInfo *slots, int group_id,
         break;
     case QXL_COPY_BITS:
         red_get_point_ptr(&red->u.copy_bits.src_pos, &qxl->u.copy_bits.src_pos);
-        red->surfaces_dest[0] = 0;
+        red->surface_deps[0] = 0;
         red->surfaces_rects[0].left   = red->u.copy_bits.src_pos.x;
         red->surfaces_rects[0].right  = red->u.copy_bits.src_pos.x +
             (red->bbox.right - red->bbox.left);
