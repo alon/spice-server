@@ -294,8 +294,6 @@ struct RedGlzDrawable {
 pthread_mutex_t glz_dictionary_list_lock = PTHREAD_MUTEX_INITIALIZER;
 Ring glz_dictionary_list = {&glz_dictionary_list, &glz_dictionary_list};
 
-#define NUM_CURSORS 100
-
 typedef struct RedWorker {
     pthread_t thread;
     clockid_t clockid;
