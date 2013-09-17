@@ -240,11 +240,6 @@ typedef struct SurfaceDestroyItem {
     PipeItem pipe_item;
 } SurfaceDestroyItem;
 
-typedef struct SurfaceCreateItem {
-    SpiceMsgSurfaceCreate surface_create;
-    PipeItem pipe_item;
-} SurfaceCreateItem;
-
 typedef struct UpgradeItem {
     PipeItem base;
     int refs;
@@ -271,6 +266,8 @@ void                       display_channel_set_surface_release_info  (DisplayCha
 void                       display_channel_show_tree                 (DisplayChannel *display);
 int                        display_channel_add_drawable              (DisplayChannel *display,
                                                                       Drawable *drawable);
+void                       display_channel_current_flush             (DisplayChannel *display,
+                                                                      int surface_id);
 
 static inline int is_equal_path(SpicePath *path1, SpicePath *path2)
 {
