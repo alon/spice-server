@@ -230,3 +230,55 @@ void container_cleanup(Container *container)
         container = next;
     }
 }
+
+/* FIXME: document weird function: go down containers, and return drawable->shadow? */
+Shadow* tree_item_find_shadow(TreeItem *item)
+{
+    while (item->type == TREE_ITEM_TYPE_CONTAINER) {
+        if (!(item = (TreeItem *)ring_get_tail(&((Container *)item)->items))) {
+            return NULL;
+        }
+    }
+
+    if (item->type != TREE_ITEM_TYPE_DRAWABLE) {
+        return NULL;
+    }
+
+    return ((DrawItem *)item)->shadow;
+}
+
+/* FIXME: weird function: return container ring, or ring... */
+Ring *tree_item_container_items(TreeItem *item, Ring *ring)
+{
+    return (item->container) ? &item->container->items : ring;
+}
+
+/* FIXME: weird function: true if item has some parent container == ring, or has no immediate container*/
+int tree_item_contained_by(TreeItem *item, Ring *ring)
+{
+    spice_assert(item && ring);
+    do {
+        Ring *now = tree_item_container_items(item, ring);
+        if (now == ring) {
+            return TRUE;
+        }
+    } while ((item = (TreeItem *)item->container));
+
+    return FALSE;
+}
+
+void draw_item_remove_shadow(DrawItem *item)
+{
+    Shadow *shadow;
+
+    if (!item->shadow) {
+        return;
+    }
+    shadow = item->shadow;
+    item->shadow = NULL;
+    /* shadow_free? */
+    ring_remove(&shadow->base.siblings_link);
+    region_destroy(&shadow->base.rgn);
+    region_destroy(&shadow->on_hold);
+    free(shadow);
+}

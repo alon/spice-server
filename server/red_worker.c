@@ -78,9 +78,6 @@
 
 #define DISPLAY_FREE_LIST_DEFAULT_SIZE 128
 
-#define FPS_TEST_INTERVAL 1
-#define MAX_FPS 30
-
 #define MIN_GLZ_SIZE_FOR_ZLIB 100
 
 #define VALIDATE_SURFACE_RET(worker, surface_id) \
@@ -190,7 +187,6 @@ static void red_draw_drawable(DisplayChannel *display, Drawable *item);
 static void red_update_area(DisplayChannel *display, const SpiceRect *area, int surface_id);
 static void red_update_area_till(DisplayChannel *display, const SpiceRect *area, int surface_id,
                                  Drawable *last);
-static inline void display_channel_stream_maintenance(DisplayChannel *display, Drawable *candidate, Drawable *sect);
 static inline void display_begin_send_message(RedChannelClient *rcc);
 static void red_release_glz(DisplayChannelClient *dcc);
 static void red_freeze_glz(DisplayChannelClient *dcc);
@@ -208,10 +204,6 @@ static void red_create_surface(DisplayChannel *display, uint32_t surface_id, uin
                                uint32_t height, int32_t stride, uint32_t format,
                                void *line_0, int data_is_valid, int send_client);
 
-#define LINK_TO_DPI(ptr) SPICE_CONTAINEROF((ptr), DrawablePipeItem, base)
-#define DRAWABLE_FOREACH_DPI_SAFE(drawable, link, next, dpi)          \
-    SAFE_FOREACH(link, next, drawable,  &(drawable)->pipes, dpi, LINK_TO_DPI(link))
-
 
 #define LINK_TO_GLZ(ptr) SPICE_CONTAINEROF((ptr), RedGlzDrawable, \
                                            drawable_link)
@@ -228,22 +220,6 @@ static void display_stream_clip_unref(DisplayChannel *display, StreamClipItem *i
     free(item->rects);
     free(item);
 }
-
-static void dcc_push_stream_agent_clip(DisplayChannelClient* dcc, StreamAgent *agent)
-{
-    StreamClipItem *item = stream_clip_item_new(dcc, agent);
-    int n_rects;
-
-    item->clip_type = SPICE_CLIP_TYPE_RECTS;
-
-    n_rects = pixman_region32_n_rects(&agent->clip);
-    item->rects = spice_malloc_n_m(n_rects, sizeof(SpiceRect), sizeof(SpiceClipRects));
-    item->rects->num_rects = n_rects;
-    region_ret_rects(&agent->clip, item->rects->rects, n_rects);
-
-    red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), (PipeItem *)item);
-}
-
 
 void attach_stream(DisplayChannel *display, Drawable *drawable, Stream *stream)
 {
@@ -271,7 +247,7 @@ void attach_stream(DisplayChannel *display, Drawable *drawable, Stream *stream)
         if (!region_is_equal(&clip_in_draw_dest, &drawable->tree_item.base.rgn)) {
             region_remove(&agent->clip, &drawable->red_drawable->bbox);
             region_or(&agent->clip, &drawable->tree_item.base.rgn);
-            dcc_push_stream_agent_clip(dcc, agent);
+            dcc_add_stream_agent_clip(dcc, agent);
         }
 #ifdef STREAM_STATS
         agent->stats.num_input_frames++;
@@ -395,7 +371,7 @@ static int cursor_is_connected(RedWorker *worker)
         red_channel_is_connected(RED_CHANNEL(worker->cursor_channel));
 }
 
-static void dcc_add_drawable(DisplayChannelClient *dcc, Drawable *drawable)
+void dcc_add_drawable(DisplayChannelClient *dcc, Drawable *drawable)
 {
     DrawablePipeItem *dpi;
 
@@ -404,7 +380,7 @@ static void dcc_add_drawable(DisplayChannelClient *dcc, Drawable *drawable)
     red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &dpi->dpi_pipe_item);
 }
 
-static void red_pipes_add_drawable(DisplayChannel *display, Drawable *drawable)
+void red_pipes_add_drawable(DisplayChannel *display, Drawable *drawable)
 {
     DisplayChannelClient *dcc;
     RingItem *dcc_ring_item, *next;
@@ -427,8 +403,8 @@ static void dcc_add_drawable_to_tail(DisplayChannelClient *dcc, Drawable *drawab
     red_channel_client_pipe_add_tail(RED_CHANNEL_CLIENT(dcc), &dpi->dpi_pipe_item);
 }
 
-static inline void red_pipes_add_drawable_after(DisplayChannel *display,
-                                                Drawable *drawable, Drawable *pos_after)
+void red_pipes_add_drawable_after(DisplayChannel *display,
+                                  Drawable *drawable, Drawable *pos_after)
 {
     DrawablePipeItem *dpi, *dpi_pos_after;
     RingItem *dpi_link, *dpi_next;
@@ -474,7 +450,7 @@ static inline PipeItem *red_pipe_get_tail(DisplayChannelClient *dcc)
     return (PipeItem*)ring_get_tail(&RED_CHANNEL_CLIENT(dcc)->pipe);
 }
 
-static inline void red_pipes_remove_drawable(Drawable *drawable)
+void red_pipes_remove_drawable(Drawable *drawable)
 {
     DrawablePipeItem *dpi;
     RingItem *item, *next;
@@ -646,9 +622,6 @@ static void drawable_remove_dependencies(DisplayChannel *display, Drawable *draw
     }
 }
 
-static void detach_stream(DisplayChannel *display, Stream *stream,
-                          int detach_sized);
-
 void display_channel_drawable_unref(DisplayChannel *display, Drawable *drawable)
 {
     RingItem *item, *next;
@@ -675,21 +648,6 @@ void display_channel_drawable_unref(DisplayChannel *display, Drawable *drawable)
     red_drawable_unref(COMMON_CHANNEL(display)->worker, drawable->red_drawable, drawable->group_id);
     drawable_free(display, drawable);
     display->drawable_count--;
-}
-
-static void remove_shadow(DisplayChannel *display, DrawItem *item)
-{
-    Shadow *shadow;
-
-    if (!item->shadow) {
-        return;
-    }
-    shadow = item->shadow;
-    item->shadow = NULL;
-    ring_remove(&shadow->base.siblings_link);
-    region_destroy(&shadow->base.rgn);
-    region_destroy(&shadow->on_hold);
-    free(shadow);
 }
 
 static void display_stream_trace_add_drawable(DisplayChannel *display, Drawable *item)
@@ -730,10 +688,11 @@ static void red_flush_source_surfaces(DisplayChannel *display, Drawable *drawabl
     }
 }
 
-static inline void current_remove_drawable(DisplayChannel *display, Drawable *item)
+void current_remove_drawable(DisplayChannel *display, Drawable *item)
 {
+    /* todo: move all to unref? */
     display_stream_trace_add_drawable(display, item);
-    remove_shadow(display, &item->tree_item);
+    draw_item_remove_shadow(&item->tree_item);
     ring_remove(&item->tree_item.base.siblings_link);
     ring_remove(&item->list_link);
     ring_remove(&item->surface_list_link);
@@ -741,13 +700,7 @@ static inline void current_remove_drawable(DisplayChannel *display, Drawable *it
     display->current_size--;
 }
 
-static void remove_drawable(DisplayChannel *display, Drawable *drawable)
-{
-    red_pipes_remove_drawable(drawable);
-    current_remove_drawable(display, drawable);
-}
-
-static inline void current_remove(DisplayChannel *display, TreeItem *item)
+void current_remove(DisplayChannel *display, TreeItem *item)
 {
     TreeItem *now = item;
 
@@ -757,8 +710,10 @@ static inline void current_remove(DisplayChannel *display, TreeItem *item)
         RingItem *ring_item;
 
         if (now->type == TREE_ITEM_TYPE_DRAWABLE) {
+            Drawable *drawable = SPICE_CONTAINEROF(now, Drawable, tree_item);
             ring_item = now->siblings_link.prev;
-            remove_drawable(display, SPICE_CONTAINEROF(now, Drawable, tree_item));
+            red_pipes_remove_drawable(drawable);
+            current_remove_drawable(display, drawable);
         } else {
             Container *container = (Container *)now;
 
@@ -783,7 +738,7 @@ static inline void current_remove(DisplayChannel *display, TreeItem *item)
     }
 }
 
-static void current_clear(DisplayChannel *display, int surface_id)
+static void current_remove_all(DisplayChannel *display, int surface_id)
 {
     Ring *ring = &display->surfaces[surface_id].current;
     RingItem *ring_item;
@@ -889,189 +844,8 @@ static void red_clear_surface_drawables_from_pipes(DisplayChannel *display,
     }
 }
 
-static inline Shadow *__find_shadow(TreeItem *item)
-{
-    while (item->type == TREE_ITEM_TYPE_CONTAINER) {
-        if (!(item = (TreeItem *)ring_get_tail(&((Container *)item)->items))) {
-            return NULL;
-        }
-    }
-
-    if (item->type != TREE_ITEM_TYPE_DRAWABLE) {
-        return NULL;
-    }
-
-    return ((DrawItem *)item)->shadow;
-}
-
-/* FIXME: weird function: return container ring, or ring... */
-static inline Ring *ring_of(Ring *ring, TreeItem *item)
-{
-    return (item->container) ? &item->container->items : ring;
-}
-
-/* FIXME: weird function: true if item has some parent container == ring, or has no immediate container*/
-static inline int __contained_by(TreeItem *item, Ring *ring)
-{
-    spice_assert(item && ring);
-    do {
-        Ring *now = ring_of(ring, item);
-        if (now == ring) {
-            return TRUE;
-        }
-    } while ((item = (TreeItem *)item->container));
-
-    return FALSE;
-}
-
-static void __exclude_region(DisplayChannel *display, Ring *ring, TreeItem *item, QRegion *rgn,
-                             Ring **top_ring, Drawable *frame_candidate)
-{
-    QRegion and_rgn;
-#ifdef RED_WORKER_STAT
-    RedWorker *worker = COMMON_CHANNEL(display)->worker;
-    stat_time_t start_time = stat_now(worker->clockid);
-#endif
-
-    region_clone(&and_rgn, rgn);
-    region_and(&and_rgn, &item->rgn);
-    if (!region_is_empty(&and_rgn)) {
-        if (IS_DRAW_ITEM(item)) {
-            DrawItem *draw = (DrawItem *)item;
-
-            if (draw->effect == QXL_EFFECT_OPAQUE) {
-                region_exclude(rgn, &and_rgn);
-            }
-
-            if (draw->shadow) {
-                Shadow *shadow;
-                int32_t x = item->rgn.extents.x1;
-                int32_t y = item->rgn.extents.y1;
-
-                region_exclude(&draw->base.rgn, &and_rgn);
-                shadow = draw->shadow;
-                region_offset(&and_rgn, shadow->base.rgn.extents.x1 - x,
-                              shadow->base.rgn.extents.y1 - y);
-                region_exclude(&shadow->base.rgn, &and_rgn);
-                region_and(&and_rgn, &shadow->on_hold);
-                if (!region_is_empty(&and_rgn)) {
-                    region_exclude(&shadow->on_hold, &and_rgn);
-                    region_or(rgn, &and_rgn);
-                    // in flat representation of current, shadow is always his owner next
-                    if (!__contained_by((TreeItem*)shadow, *top_ring)) {
-                        *top_ring = ring_of(ring, (TreeItem*)shadow);
-                    }
-                }
-            } else {
-                if (frame_candidate) {
-                    Drawable *drawable = SPICE_CONTAINEROF(draw, Drawable, tree_item);
-                    display_channel_stream_maintenance(display, frame_candidate, drawable);
-                }
-                region_exclude(&draw->base.rgn, &and_rgn);
-            }
-        } else if (item->type == TREE_ITEM_TYPE_CONTAINER) {
-            region_exclude(&item->rgn, &and_rgn);
-
-            if (region_is_empty(&item->rgn)) {  //assume container removal will follow
-                Shadow *shadow;
-
-                region_exclude(rgn, &and_rgn);
-                if ((shadow = __find_shadow(item))) {
-                    region_or(rgn, &shadow->on_hold);
-                    if (!__contained_by((TreeItem*)shadow, *top_ring)) {
-                        *top_ring = ring_of(ring, (TreeItem*)shadow);
-                    }
-                }
-            }
-        } else {
-            Shadow *shadow;
-
-            spice_assert(item->type == TREE_ITEM_TYPE_SHADOW);
-            shadow = (Shadow *)item;
-            region_exclude(rgn, &and_rgn);
-            region_or(&shadow->on_hold, &and_rgn);
-        }
-    }
-    region_destroy(&and_rgn);
-    stat_add(&display->__exclude_stat, start_time);
-}
-
-static void exclude_region(DisplayChannel *display, Ring *ring, RingItem *ring_item,
-                           QRegion *rgn, TreeItem **last, Drawable *frame_candidate)
-{
-#ifdef RED_WORKER_STAT
-    RedWorker *worker = COMMON_CHANNEL(display)->worker;
-    stat_time_t start_time = stat_now(worker->clockid);
-#endif
-    Ring *top_ring;
-
-    if (!ring_item) {
-        return;
-    }
-
-    top_ring = ring;
-
-    for (;;) {
-        TreeItem *now = SPICE_CONTAINEROF(ring_item, TreeItem, siblings_link);
-        Container *container = now->container;
-
-        spice_assert(!region_is_empty(&now->rgn));
-
-        if (region_intersects(rgn, &now->rgn)) {
-            __exclude_region(display, ring, now, rgn, &top_ring, frame_candidate);
-
-            if (region_is_empty(&now->rgn)) {
-                spice_assert(now->type != TREE_ITEM_TYPE_SHADOW);
-                ring_item = now->siblings_link.prev;
-                current_remove(display, now);
-                if (last && *last == now) {
-                    *last = (TreeItem *)ring_next(ring, ring_item);
-                }
-            } else if (now->type == TREE_ITEM_TYPE_CONTAINER) {
-                Container *container = (Container *)now;
-                if ((ring_item = ring_get_head(&container->items))) {
-                    ring = &container->items;
-                    spice_assert(((TreeItem *)ring_item)->container);
-                    continue;
-                }
-                ring_item = &now->siblings_link;
-            }
-
-            if (region_is_empty(rgn)) {
-                stat_add(&display->exclude_stat, start_time);
-                return;
-            }
-        }
-
-        while ((last && *last == (TreeItem *)ring_item) ||
-               !(ring_item = ring_next(ring, ring_item))) {
-            if (ring == top_ring) {
-                stat_add(&display->exclude_stat, start_time);
-                return;
-            }
-            ring_item = &container->base.siblings_link;
-            container = container->base.container;
-            ring = (container) ? &container->items : top_ring;
-        }
-    }
-}
-
-static void current_add_drawable(DisplayChannel *display,
-                                 Drawable *drawable, RingItem *pos)
-{
-    RedSurface *surface;
-    uint32_t surface_id = drawable->surface_id;
-
-    surface = &display->surfaces[surface_id];
-    ring_add_after(&drawable->tree_item.base.siblings_link, pos);
-    ring_add(&display->current_list, &drawable->list_link);
-    ring_add(&surface->current_list, &drawable->surface_list_link);
-    display->current_size++;
-    drawable->refs++;
-}
-
-static void detach_stream(DisplayChannel *display, Stream *stream,
-                          int detach_sized)
+void detach_stream(DisplayChannel *display, Stream *stream,
+                   int detach_sized)
 {
     spice_assert(stream->current && stream->current->stream);
     spice_assert(stream->current->stream == stream);
@@ -1110,7 +884,7 @@ static void dcc_detach_stream_gracefully(DisplayChannelClient *dcc,
 
     /* stopping the client from playing older frames at once*/
     region_clear(&agent->clip);
-    dcc_push_stream_agent_clip(dcc, agent);
+    dcc_add_stream_agent_clip(dcc, agent);
 
     if (region_is_empty(&agent->vis_region)) {
         spice_debug("stream %d: vis region empty", stream_id);
@@ -1192,7 +966,7 @@ static void detach_stream_gracefully(DisplayChannel *display, Stream *stream,
  *           involves sending an upgrade image to the client, this drawable won't be rendered
  *           (see red_display_detach_stream_gracefully).
  */
-static void detach_streams_behind(DisplayChannel *display, QRegion *region, Drawable *drawable)
+void detach_streams_behind(DisplayChannel *display, QRegion *region, Drawable *drawable)
 {
     Ring *ring = &display->streams;
     RingItem *item = ring_get_head(ring);
@@ -1223,57 +997,6 @@ static void detach_streams_behind(DisplayChannel *display, QRegion *region, Draw
             }
         }
     }
-}
-
-static void streams_update_visible_region(DisplayChannel *display, Drawable *drawable)
-{
-    Ring *ring;
-    RingItem *item;
-    RingItem *dcc_ring_item, *next;
-    DisplayChannelClient *dcc;
-
-    if (!red_channel_is_connected(RED_CHANNEL(display))) {
-        return;
-    }
-
-    if (!is_primary_surface(display, drawable->surface_id)) {
-        return;
-    }
-
-    ring = &display->streams;
-    item = ring_get_head(ring);
-
-    while (item) {
-        Stream *stream = SPICE_CONTAINEROF(item, Stream, link);
-        StreamAgent *agent;
-
-        item = ring_next(ring, item);
-
-        if (stream->current == drawable) {
-            continue;
-        }
-
-        FOREACH_DCC(display, dcc_ring_item, next, dcc) {
-            agent = &dcc->stream_agents[get_stream_id(display, stream)];
-
-            if (region_intersects(&agent->vis_region, &drawable->tree_item.base.rgn)) {
-                region_exclude(&agent->vis_region, &drawable->tree_item.base.rgn);
-                region_exclude(&agent->clip, &drawable->tree_item.base.rgn);
-                dcc_push_stream_agent_clip(dcc, agent);
-            }
-        }
-    }
-}
-
-static Stream *display_channel_stream_try_new(DisplayChannel *display)
-{
-    Stream *stream;
-    if (!display->free_streams) {
-        return NULL;
-    }
-    stream = display->free_streams;
-    display->free_streams = display->free_streams->next;
-    return stream;
 }
 
 static uint64_t red_stream_get_initial_bit_rate(DisplayChannelClient *dcc,
@@ -1402,7 +1125,7 @@ static void red_stream_update_client_playback_latency(void *opaque, uint32_t del
     main_dispatcher_set_mm_time_latency(RED_CHANNEL_CLIENT(agent->dcc)->client, agent->dcc->streams_max_latency);
 }
 
-static void dcc_create_stream(DisplayChannelClient *dcc, Stream *stream)
+void dcc_create_stream(DisplayChannelClient *dcc, Stream *stream)
 {
     StreamAgent *agent = &dcc->stream_agents[get_stream_id(DCC_TO_DC(dcc), stream)];
 
@@ -1451,72 +1174,6 @@ static void dcc_create_stream(DisplayChannelClient *dcc, Stream *stream)
 #endif
 }
 
-static gboolean red_stream_input_fps_timer_cb(void *opaque)
-{
-    Stream *stream = opaque;
-    uint64_t now = red_get_monotonic_time();
-    double duration_sec;
-
-    spice_return_val_if_fail(opaque != NULL, TRUE);
-    spice_return_val_if_fail(now != stream->input_fps_timer_start, TRUE);
-
-    duration_sec = (now - stream->input_fps_timer_start)/(1000.0*1000*1000);
-    stream->input_fps = stream->num_input_frames / duration_sec;
-    spice_debug("input-fps=%u", stream->input_fps);
-    stream->num_input_frames = 0;
-    stream->input_fps_timer_start = now;
-
-    return TRUE;
-}
-
-static void display_channel_create_stream(DisplayChannel *display, Drawable *drawable)
-{
-    DisplayChannelClient *dcc;
-    RingItem *dcc_ring_item, *next;
-    Stream *stream;
-    SpiceRect* src_rect;
-
-    spice_assert(!drawable->stream);
-
-    if (!(stream = display_channel_stream_try_new(display))) {
-        return;
-    }
-
-    spice_assert(drawable->red_drawable->type == QXL_DRAW_COPY);
-    src_rect = &drawable->red_drawable->u.copy.src_area;
-
-    ring_add(&display->streams, &stream->link);
-    stream->current = drawable;
-    stream->last_time = drawable->creation_time;
-    stream->width = src_rect->right - src_rect->left;
-    stream->height = src_rect->bottom - src_rect->top;
-    stream->dest_area = drawable->red_drawable->bbox;
-    stream->refs = 1;
-    SpiceBitmap *bitmap = &drawable->red_drawable->u.copy.src_bitmap->u.bitmap;
-    stream->top_down = !!(bitmap->flags & SPICE_BITMAP_FLAGS_TOP_DOWN);
-    drawable->stream = stream;
-
-    GSource *source = g_timeout_source_new(RED_STREAM_INPUT_FPS_TIMEOUT);
-    g_source_set_callback(source, red_stream_input_fps_timer_cb, stream, NULL);
-    stream->input_fps_timer =
-        g_source_attach(source, red_worker_get_context(COMMON_CHANNEL(display)->worker));
-    g_source_unref(source);
-
-    stream->num_input_frames = 0;
-    stream->input_fps_timer_start = red_get_monotonic_time();
-    stream->input_fps = MAX_FPS;
-    display->streams_size_total += stream->width * stream->height;
-    display->stream_count++;
-    FOREACH_DCC(display, dcc_ring_item, next, dcc) {
-        dcc_create_stream(dcc, stream);
-    }
-    spice_debug("stream %d %dx%d (%d, %d) (%d, %d)",
-                (int)(stream - display->streams_buf), stream->width,
-                stream->height, stream->dest_area.left, stream->dest_area.top,
-                stream->dest_area.right, stream->dest_area.bottom);
-    return;
-}
-
 static void dcc_create_all_streams(DisplayChannelClient *dcc)
 {
     Ring *ring = &DCC_TO_DC(dcc)->streams;
@@ -1559,682 +1216,6 @@ static void dcc_destroy_stream_agents(DisplayChannelClient *dcc)
             agent->mjpeg_encoder = NULL;
         }
     }
-}
-
-static int is_next_stream_frame(DisplayChannel *display,
-                                const Drawable *candidate,
-                                const int other_src_width,
-                                const int other_src_height,
-                                const SpiceRect *other_dest,
-                                const red_time_t other_time,
-                                const Stream *stream,
-                                int container_candidate_allowed)
-{
-    RedDrawable *red_drawable;
-    int is_frame_container = FALSE;
-
-    if (!candidate->streamable) {
-        return STREAM_FRAME_NONE;
-    }
-
-    if (candidate->creation_time - other_time >
-            (stream ? RED_STREAM_CONTINUS_MAX_DELTA : RED_STREAM_DETACTION_MAX_DELTA)) {
-        return STREAM_FRAME_NONE;
-    }
-
-    red_drawable = candidate->red_drawable;
-    if (!container_candidate_allowed) {
-        SpiceRect* candidate_src;
-
-        if (!rect_is_equal(&red_drawable->bbox, other_dest)) {
-            return STREAM_FRAME_NONE;
-        }
-
-        candidate_src = &red_drawable->u.copy.src_area;
-        if (candidate_src->right - candidate_src->left != other_src_width ||
-            candidate_src->bottom - candidate_src->top != other_src_height) {
-            return STREAM_FRAME_NONE;
-        }
-    } else {
-        if (rect_contains(&red_drawable->bbox, other_dest)) {
-            int candidate_area = rect_get_area(&red_drawable->bbox);
-            int other_area = rect_get_area(other_dest);
-            /* do not stream drawables that are significantly
-             * bigger than the original frame */
-            if (candidate_area > 2 * other_area) {
-                spice_debug("too big candidate:");
-                spice_debug("prev box ==>");
-                rect_debug(other_dest);
-                spice_debug("new box ==>");
-                rect_debug(&red_drawable->bbox);
-                return STREAM_FRAME_NONE;
-            }
-
-            if (candidate_area > other_area) {
-                is_frame_container = TRUE;
-            }
-        } else {
-            return STREAM_FRAME_NONE;
-        }
-    }
-
-    if (stream) {
-        SpiceBitmap *bitmap = &red_drawable->u.copy.src_bitmap->u.bitmap;
-        if (stream->top_down != !!(bitmap->flags & SPICE_BITMAP_FLAGS_TOP_DOWN)) {
-            return STREAM_FRAME_NONE;
-        }
-    }
-    if (is_frame_container) {
-        return STREAM_FRAME_CONTAINER;
-    } else {
-        return STREAM_FRAME_NATIVE;
-    }
-}
-
-static void before_reattach_stream(DisplayChannel *display,
-                                   Stream *stream, Drawable *new_frame)
-{
-    DrawablePipeItem *dpi;
-    DisplayChannelClient *dcc;
-    int index;
-    StreamAgent *agent;
-    RingItem *ring_item, *next;
-
-    spice_return_if_fail(stream->current);
-
-    if (!red_channel_is_connected(RED_CHANNEL(display))) {
-        return;
-    }
-
-    if (new_frame->process_commands_generation == stream->current->process_commands_generation) {
-        spice_debug("ignoring drop, same process_commands_generation as previous frame");
-        return;
-    }
-
-    index = get_stream_id(display, stream);
-    DRAWABLE_FOREACH_DPI_SAFE(stream->current, ring_item, next, dpi) {
-        dcc = dpi->dcc;
-        agent = &dcc->stream_agents[index];
-
-        if (!dcc->use_mjpeg_encoder_rate_control &&
-            !dcc->common.is_low_bandwidth) {
-            continue;
-        }
-
-        if (pipe_item_is_linked(&dpi->dpi_pipe_item)) {
-#ifdef STREAM_STATS
-            agent->stats.num_drops_pipe++;
-#endif
-            if (dcc->use_mjpeg_encoder_rate_control) {
-                mjpeg_encoder_notify_server_frame_drop(agent->mjpeg_encoder);
-            } else {
-                ++agent->drops;
-            }
-        }
-    }
-
-
-    FOREACH_DCC(display, ring_item, next, dcc) {
-        double drop_factor;
-
-        agent = &dcc->stream_agents[index];
-
-        if (dcc->use_mjpeg_encoder_rate_control) {
-            continue;
-        }
-        if (agent->frames / agent->fps < FPS_TEST_INTERVAL) {
-            agent->frames++;
-            continue;
-        }
-        drop_factor = ((double)agent->frames - (double)agent->drops) /
-            (double)agent->frames;
-        spice_debug("stream %d: #frames %u #drops %u", index, agent->frames, agent->drops);
-        if (drop_factor == 1) {
-            if (agent->fps < MAX_FPS) {
-                agent->fps++;
-                spice_debug("stream %d: fps++ %u", index, agent->fps);
-            }
-        } else if (drop_factor < 0.9) {
-            if (agent->fps > 1) {
-                agent->fps--;
-                spice_debug("stream %d: fps--%u", index, agent->fps);
-            }
-        }
-        agent->frames = 1;
-        agent->drops = 0;
-    }
-}
-
-static void update_copy_graduality(Drawable *drawable)
-{
-    SpiceBitmap *bitmap;
-    spice_return_if_fail(drawable->red_drawable->type == QXL_DRAW_COPY);
-
-    /* TODO: global property -> per dc/dcc */
-    if (streaming_video != STREAM_VIDEO_FILTER) {
-        drawable->copy_bitmap_graduality = BITMAP_GRADUAL_INVALID;
-        return;
-    }
-
-    if (drawable->copy_bitmap_graduality != BITMAP_GRADUAL_INVALID) {
-        return; // already set
-    }
-
-    bitmap = &drawable->red_drawable->u.copy.src_bitmap->u.bitmap;
-
-    if (!bitmap_fmt_has_graduality(bitmap->format) || bitmap_has_extra_stride(bitmap) ||
-        (bitmap->data->flags & SPICE_CHUNKS_FLAGS_UNSTABLE)) {
-        drawable->copy_bitmap_graduality = BITMAP_GRADUAL_NOT_AVAIL;
-    } else  {
-        drawable->copy_bitmap_graduality = bitmap_get_graduality_level(bitmap);
-    }
-}
-
-static int is_stream_start(Drawable *drawable)
-{
-    return ((drawable->frames_count >= RED_STREAM_FRAMES_START_CONDITION) &&
-            (drawable->gradual_frames_count >=
-            (RED_STREAM_GRADUAL_FRAMES_START_CONDITION * drawable->frames_count)));
-}
-
-// returns whether a stream was created
-static int display_channel_stream_add_frame(DisplayChannel *display,
-                                            Drawable *frame_drawable,
-                                            int frames_count,
-                                            int gradual_frames_count,
-                                            int last_gradual_frame)
-{
-    update_copy_graduality(frame_drawable);
-    frame_drawable->frames_count = frames_count + 1;
-    frame_drawable->gradual_frames_count  = gradual_frames_count;
-
-    if (frame_drawable->copy_bitmap_graduality != BITMAP_GRADUAL_LOW) {
-        if ((frame_drawable->frames_count - last_gradual_frame) >
-            RED_STREAM_FRAMES_RESET_CONDITION) {
-            frame_drawable->frames_count = 1;
-            frame_drawable->gradual_frames_count = 1;
-        } else {
-            frame_drawable->gradual_frames_count++;
-        }
-
-        frame_drawable->last_gradual_frame = frame_drawable->frames_count;
-    } else {
-        frame_drawable->last_gradual_frame = last_gradual_frame;
-    }
-
-    if (is_stream_start(frame_drawable)) {
-        display_channel_create_stream(display, frame_drawable);
-        return TRUE;
-    }
-    return FALSE;
-}
-
-static void display_channel_stream_maintenance(DisplayChannel *display,
-                                               Drawable *candidate, Drawable *prev)
-{
-    int is_next_frame;
-
-    if (candidate->stream) {
-        return;
-    }
-
-    if (prev->stream) {
-        Stream *stream = prev->stream;
-
-        is_next_frame = is_next_stream_frame(display, candidate,
-                                             stream->width, stream->height,
-                                             &stream->dest_area, stream->last_time,
-                                             stream, TRUE);
-        if (is_next_frame != STREAM_FRAME_NONE) {
-            before_reattach_stream(display, stream, candidate);
-            detach_stream(display, stream, FALSE);
-            prev->streamable = FALSE; //prevent item trace
-            attach_stream(display, candidate, stream);
-            if (is_next_frame == STREAM_FRAME_CONTAINER) {
-                candidate->sized_stream = stream;
-            }
-        }
-    } else if (candidate->streamable) {
-        SpiceRect* prev_src = &prev->red_drawable->u.copy.src_area;
-
-        is_next_frame =
-            is_next_stream_frame(display, candidate, prev_src->right - prev_src->left,
-                                 prev_src->bottom - prev_src->top,
-                                 &prev->red_drawable->bbox, prev->creation_time,
-                                 prev->stream,
-                                 FALSE);
-        if (is_next_frame != STREAM_FRAME_NONE) {
-            display_channel_stream_add_frame(display, candidate,
-                                             prev->frames_count,
-                                             prev->gradual_frames_count,
-                                             prev->last_gradual_frame);
-        }
-    }
-}
-
-static inline int is_drawable_independent_from_surfaces(Drawable *drawable)
-{
-    int x;
-
-    for (x = 0; x < 3; ++x) {
-        if (drawable->surface_deps[x] != -1) {
-            return FALSE;
-        }
-    }
-    return TRUE;
-}
-
-static inline int red_current_add_equal(DisplayChannel *display, DrawItem *item, TreeItem *other)
-{
-    DrawItem *other_draw_item;
-    Drawable *drawable;
-    Drawable *other_drawable;
-
-    if (other->type != TREE_ITEM_TYPE_DRAWABLE) {
-        return FALSE;
-    }
-    other_draw_item = (DrawItem *)other;
-
-    if (item->shadow || other_draw_item->shadow || item->effect != other_draw_item->effect) {
-        return FALSE;
-    }
-
-    drawable = SPICE_CONTAINEROF(item, Drawable, tree_item);
-    other_drawable = SPICE_CONTAINEROF(other_draw_item, Drawable, tree_item);
-
-    if (item->effect == QXL_EFFECT_OPAQUE) {
-        int add_after = !!other_drawable->stream &&
-                        is_drawable_independent_from_surfaces(drawable);
-        display_channel_stream_maintenance(display, drawable, other_drawable);
-        current_add_drawable(display, drawable, &other->siblings_link);
-        other_drawable->refs++;
-        current_remove_drawable(display, other_drawable);
-        if (add_after) {
-            red_pipes_add_drawable_after(display, drawable, other_drawable);
-        } else {
-            red_pipes_add_drawable(display, drawable);
-        }
-        red_pipes_remove_drawable(other_drawable);
-        display_channel_drawable_unref(display, other_drawable);
-        return TRUE;
-    }
-
-    switch (item->effect) {
-    case QXL_EFFECT_REVERT_ON_DUP:
-        if (is_same_drawable(drawable, other_drawable)) {
-
-            DisplayChannelClient *dcc;
-            DrawablePipeItem *dpi;
-            RingItem *worker_ring_item, *dpi_ring_item;
-
-            other_drawable->refs++;
-            current_remove_drawable(display, other_drawable);
-
-            /* sending the drawable to clients that already received
-             * (or will receive) other_drawable */
-            worker_ring_item = ring_get_head(&RED_CHANNEL(display)->clients);
-            dpi_ring_item = ring_get_head(&other_drawable->pipes);
-            /* dpi contains a sublist of dcc's, ordered the same */
-            while (worker_ring_item) {
-                dcc = SPICE_CONTAINEROF(worker_ring_item, DisplayChannelClient,
-                                        common.base.channel_link);
-                dpi = SPICE_CONTAINEROF(dpi_ring_item, DrawablePipeItem, base);
-                while (worker_ring_item && (!dpi || dcc != dpi->dcc)) {
-                    dcc_add_drawable(dcc, drawable);
-                    worker_ring_item = ring_next(&RED_CHANNEL(display)->clients,
-                                                 worker_ring_item);
-                    dcc = SPICE_CONTAINEROF(worker_ring_item, DisplayChannelClient,
-                                            common.base.channel_link);
-                }
-
-                if (dpi_ring_item) {
-                    dpi_ring_item = ring_next(&other_drawable->pipes, dpi_ring_item);
-                }
-                if (worker_ring_item) {
-                    worker_ring_item = ring_next(&RED_CHANNEL(display)->clients,
-                                                 worker_ring_item);
-                }
-            }
-            /* not sending other_drawable where possible */
-            red_pipes_remove_drawable(other_drawable);
-
-            display_channel_drawable_unref(display, other_drawable);
-            return TRUE;
-        }
-        break;
-    case QXL_EFFECT_OPAQUE_BRUSH:
-        if (is_same_geometry(drawable, other_drawable)) {
-            current_add_drawable(display, drawable, &other->siblings_link);
-            remove_drawable(display, other_drawable);
-            red_pipes_add_drawable(display, drawable);
-            return TRUE;
-        }
-        break;
-    case QXL_EFFECT_NOP_ON_DUP:
-        if (is_same_drawable(drawable, other_drawable)) {
-            return TRUE;
-        }
-        break;
-    }
-    return FALSE;
-}
-
-#define FOREACH_STREAMS(display, item)                  \
-    for (item = ring_get_head(&(display)->streams);     \
-         item != NULL;                                  \
-         item = ring_next(&(display)->streams, item))
-
-static void red_use_stream_trace(DisplayChannel *display, Drawable *drawable)
-{
-    ItemTrace *trace;
-    ItemTrace *trace_end;
-    RingItem *item;
-
-    if (drawable->stream || !drawable->streamable || drawable->frames_count) {
-        return;
-    }
-
-    FOREACH_STREAMS(display, item) {
-        Stream *stream = SPICE_CONTAINEROF(item, Stream, link);
-        int is_next_frame = is_next_stream_frame(display,
-                                                 drawable,
-                                                 stream->width,
-                                                 stream->height,
-                                                 &stream->dest_area,
-                                                 stream->last_time,
-                                                 stream,
-                                                 TRUE);
-        if (is_next_frame != STREAM_FRAME_NONE) {
-            if (stream->current) {
-                stream->current->streamable = FALSE; //prevent item trace
-                before_reattach_stream(display, stream, drawable);
-                detach_stream(display, stream, FALSE);
-            }
-            attach_stream(display, drawable, stream);
-            if (is_next_frame == STREAM_FRAME_CONTAINER) {
-                drawable->sized_stream = stream;
-            }
-            return;
-        }
-    }
-
-    trace = display->items_trace;
-    trace_end = trace + NUM_TRACE_ITEMS;
-    for (; trace < trace_end; trace++) {
-        if (is_next_stream_frame(display, drawable, trace->width, trace->height,
-                                       &trace->dest_area, trace->time, NULL, FALSE) !=
-                                       STREAM_FRAME_NONE) {
-            if (display_channel_stream_add_frame(display, drawable,
-                                                 trace->frames_count,
-                                                 trace->gradual_frames_count,
-                                                 trace->last_gradual_frame)) {
-                return;
-            }
-        }
-    }
-}
-
-static int current_add(DisplayChannel *display, Ring *ring, Drawable *drawable)
-{
-    DrawItem *item = &drawable->tree_item;
-#ifdef RED_WORKER_STAT
-    RedWorker *worker = COMMON_CHANNEL(display)->worker;
-    stat_time_t start_time = stat_now(worker->clockid);
-#endif
-    RingItem *now;
-    QRegion exclude_rgn;
-    RingItem *exclude_base = NULL;
-
-    spice_return_val_if_fail(!region_is_empty(&item->base.rgn), FALSE);
-    region_init(&exclude_rgn);
-    now = ring_next(ring, ring);
-
-    while (now) {
-        TreeItem *sibling = SPICE_CONTAINEROF(now, TreeItem, siblings_link);
-        int test_res;
-
-        if (!region_bounds_intersects(&item->base.rgn, &sibling->rgn)) {
-            now = ring_next(ring, now);
-            continue;
-        }
-        test_res = region_test(&item->base.rgn, &sibling->rgn, REGION_TEST_ALL);
-        if (!(test_res & REGION_TEST_SHARED)) {
-            now = ring_next(ring, now);
-            continue;
-        } else if (sibling->type != TREE_ITEM_TYPE_SHADOW) {
-            if (!(test_res & REGION_TEST_RIGHT_EXCLUSIVE) &&
-                                                   !(test_res & REGION_TEST_LEFT_EXCLUSIVE) &&
-                                                   red_current_add_equal(display, item, sibling)) {
-                stat_add(&display->add_stat, start_time);
-                return FALSE;
-            }
-
-            if (!(test_res & REGION_TEST_RIGHT_EXCLUSIVE) && item->effect == QXL_EFFECT_OPAQUE) {
-                Shadow *shadow;
-                int skip = now == exclude_base;
-
-                if ((shadow = __find_shadow(sibling))) {
-                    if (exclude_base) {
-                        TreeItem *next = sibling;
-                        exclude_region(display, ring, exclude_base, &exclude_rgn, &next, NULL);
-                        if (next != sibling) {
-                            now = next ? &next->siblings_link : NULL;
-                            exclude_base = NULL;
-                            continue;
-                        }
-                    }
-                    region_or(&exclude_rgn, &shadow->on_hold);
-                }
-                now = now->prev;
-                current_remove(display, sibling);
-                now = ring_next(ring, now);
-                if (shadow || skip) {
-                    exclude_base = now;
-                }
-                continue;
-            }
-
-            if (!(test_res & REGION_TEST_LEFT_EXCLUSIVE) && is_opaque_item(sibling)) {
-                Container *container;
-
-                if (exclude_base) {
-                    exclude_region(display, ring, exclude_base, &exclude_rgn, NULL, NULL);
-                    region_clear(&exclude_rgn);
-                    exclude_base = NULL;
-                }
-                if (sibling->type == TREE_ITEM_TYPE_CONTAINER) {
-                    container = (Container *)sibling;
-                    ring = &container->items;
-                    item->base.container = container;
-                    now = ring_next(ring, ring);
-                    continue;
-                }
-                spice_assert(IS_DRAW_ITEM(sibling));
-                if (!DRAW_ITEM(sibling)->container_root) {
-                    container = container_new(DRAW_ITEM(sibling));
-                    if (!container) {
-                        spice_warning("create new container failed");
-                        region_destroy(&exclude_rgn);
-                        return FALSE;
-                    }
-                    item->base.container = container;
-                    ring = &container->items;
-                }
-            }
-        }
-        if (!exclude_base) {
-            exclude_base = now;
-        }
-        break;
-    }
-    if (item->effect == QXL_EFFECT_OPAQUE) {
-        region_or(&exclude_rgn, &item->base.rgn);
-        exclude_region(display, ring, exclude_base, &exclude_rgn, NULL, drawable);
-        red_use_stream_trace(display, drawable);
-        streams_update_visible_region(display, drawable);
-        /*
-         * Performing the insertion after exclude_region for
-         * safety (todo: Not sure if exclude_region can affect the drawable
-         * if it is added to the tree before calling exclude_region).
-         */
-        current_add_drawable(display, drawable, ring);
-    } else {
-        /*
-         * red_detach_streams_behind can affect the current tree since it may
-         * trigger calls to update_area. Thus, the drawable should be added to the tree
-         * before calling red_detach_streams_behind
-         */
-        current_add_drawable(display, drawable, ring);
-        if (is_primary_surface(display, drawable->surface_id)) {
-            detach_streams_behind(display, &drawable->tree_item.base.rgn, drawable);
-        }
-    }
-    region_destroy(&exclude_rgn);
-    stat_add(&display->add_stat, start_time);
-    return TRUE;
-}
-
-static void add_clip_rects(QRegion *rgn, SpiceClipRects *data)
-{
-    int i;
-
-    for (i = 0; i < data->num_rects; i++) {
-        region_add(rgn, data->rects + i);
-    }
-}
-
-static int current_add_with_shadow(DisplayChannel *display, Ring *ring, Drawable *item)
-{
-#ifdef RED_WORKER_STAT
-    RedWorker *worker = COMMON_CHANNEL(display)->worker;
-    stat_time_t start_time = stat_now(worker->clockid);
-    ++display->add_with_shadow_count;
-#endif
-
-    RedDrawable *red_drawable = item->red_drawable;
-    SpicePoint delta = {
-        .x = red_drawable->u.copy_bits.src_pos.x - red_drawable->bbox.left,
-        .y = red_drawable->u.copy_bits.src_pos.y - red_drawable->bbox.top
-    };
-
-    Shadow *shadow = shadow_new(&item->tree_item, &delta);
-    if (!shadow) {
-        stat_add(&display->add_stat, start_time);
-        return FALSE;
-    }
-    // item and his shadow must initially be placed in the same container.
-    // for now putting them on root.
-
-    // only primary surface streams are supported
-    if (is_primary_surface(display, item->surface_id)) {
-        detach_streams_behind(display, &shadow->base.rgn, NULL);
-    }
-
-    ring_add(ring, &shadow->base.siblings_link);
-    current_add_drawable(display, item, ring);
-    if (item->tree_item.effect == QXL_EFFECT_OPAQUE) {
-        QRegion exclude_rgn;
-        region_clone(&exclude_rgn, &item->tree_item.base.rgn);
-        exclude_region(display, ring, &shadow->base.siblings_link, &exclude_rgn, NULL, NULL);
-        region_destroy(&exclude_rgn);
-        streams_update_visible_region(display, item);
-    } else {
-        if (is_primary_surface(display, item->surface_id)) {
-            detach_streams_behind(display, &item->tree_item.base.rgn, item);
-        }
-    }
-    stat_add(&display->add_stat, start_time);
-    return TRUE;
-}
-
-static inline int has_shadow(RedDrawable *drawable)
-{
-    return drawable->type == QXL_COPY_BITS;
-}
-
-static void drawable_update_streamable(DisplayChannel *display, Drawable *drawable)
-{
-    RedDrawable *red_drawable = drawable->red_drawable;
-    SpiceImage *image;
-
-    if (display->stream_video == STREAM_VIDEO_OFF) {
-        return;
-    }
-
-    if (!is_primary_surface(display, drawable->surface_id)) {
-        return;
-    }
-
-    if (drawable->tree_item.effect != QXL_EFFECT_OPAQUE ||
-        red_drawable->type != QXL_DRAW_COPY ||
-        red_drawable->u.copy.rop_descriptor != SPICE_ROPD_OP_PUT) {
-        return;
-    }
-
-    image = red_drawable->u.copy.src_bitmap;
-    if (image == NULL ||
-        image->descriptor.type != SPICE_IMAGE_TYPE_BITMAP) {
-        return;
-    }
-
-    if (display->stream_video == STREAM_VIDEO_FILTER) {
-        SpiceRect* rect;
-        int size;
-
-        rect = &drawable->red_drawable->u.copy.src_area;
-        size = (rect->right - rect->left) * (rect->bottom - rect->top);
-        if (size < RED_STREAM_MIN_SIZE) {
-            return;
-        }
-    }
-
-    drawable->streamable = TRUE;
-}
-
-void print_stats(DisplayChannel *display)
-{
-#ifdef RED_WORKER_STAT
-    stat_time_t total = display->add_stat.total;
-    spice_info("add with shadow count %u",
-               display->add_with_shadow_count);
-    display->add_with_shadow_count = 0;
-    spice_info("add[%u] %f exclude[%u] %f __exclude[%u] %f",
-               display->add_stat.count,
-               stat_cpu_time_to_sec(total),
-               display->exclude_stat.count,
-               stat_cpu_time_to_sec(display->exclude_stat.total),
-               display->__exclude_stat.count,
-               stat_cpu_time_to_sec(display->__exclude_stat.total));
-    spice_info("add %f%% exclude %f%% exclude2 %f%% __exclude %f%%",
-               (double)(total - display->exclude_stat.total) / total * 100,
-               (double)(display->exclude_stat.total) / total * 100,
-               (double)(display->exclude_stat.total -
-                        display->__exclude_stat.total) / display->exclude_stat.total * 100,
-               (double)(display->__exclude_stat.total) / display->exclude_stat.total * 100);
-    stat_reset(&display->add_stat);
-    stat_reset(&display->exclude_stat);
-    stat_reset(&display->__exclude_stat);
-#endif
-}
-
- static int red_add_drawable(DisplayChannel *display, Drawable *drawable)
-{
-    int ret = FALSE, surface_id = drawable->surface_id;
-    RedDrawable *red_drawable = drawable->red_drawable;
-    Ring *ring = &display->surfaces[surface_id].current;
-
-    if (has_shadow(red_drawable)) {
-        ret = current_add_with_shadow(display, ring, drawable);
-    } else {
-        drawable_update_streamable(display, drawable);
-        ret = current_add(display, ring, drawable);
-    }
-
-#ifdef RED_WORKER_STAT
-    if ((++display->add_count % 100) == 0)
-        print_stats(display);
-#endif
-    return ret;
 }
 
 static void red_get_area(DisplayChannel *display, int surface_id, const SpiceRect *area,
@@ -2501,7 +1482,7 @@ static gboolean red_process_draw(RedWorker *worker, QXLCommandExt *ext_cmd)
         QRegion rgn;
 
         region_init(&rgn);
-        add_clip_rects(&rgn, red_drawable->clip.rects);
+        region_add_clip_rects(&rgn, red_drawable->clip.rects);
         region_and(&drawable->tree_item.base.rgn, &rgn);
         region_destroy(&rgn);
     }
@@ -2541,7 +1522,7 @@ static gboolean red_process_draw(RedWorker *worker, QXLCommandExt *ext_cmd)
         goto end;
     }
 
-    if (red_add_drawable(worker->display_channel, drawable)) {
+    if (display_channel_add_drawable(worker->display_channel, drawable)) {
         red_pipes_add_drawable(worker->display_channel, drawable);
     }
 
@@ -2591,10 +1572,10 @@ static inline void red_process_surface(RedWorker *worker, RedSurfaceCmd *surface
         spice_warn_if(!red_surface->context.canvas);
         display_channel_set_surface_release_info(display, surface_id, 0, surface->release_info, group_id);
         red_handle_depends_on_target_surface(display, surface_id);
-        /* note that red_handle_depends_on_target_surface must be called before current_clear.
+        /* note that red_handle_depends_on_target_surface must be called before current_remove_all.
            otherwise "current" will hold items that other drawables may depend on, and then
-           red_current_clear will remove them from the pipe. */
-        current_clear(display, surface_id);
+           current_remove_all will remove them from the pipe. */
+        current_remove_all(display, surface_id);
         red_clear_surface_drawables_from_pipes(display, surface_id, FALSE);
         display_channel_surface_unref(display, surface_id);
         break;
@@ -3172,7 +2153,7 @@ static void red_current_flush(DisplayChannel *display, int surface_id)
     while (!ring_is_empty(&display->surfaces[surface_id].current_list)) {
         free_one_drawable(display, FALSE);
     }
-    current_clear(display, surface_id);
+    current_remove_all(display, surface_id);
 }
 
 // adding the pipe item after pos. If pos == NULL, adding to head.
@@ -4425,7 +3406,7 @@ static void surface_lossy_region_update(DisplayChannelClient *dcc,
         region_init(&clip_rgn);
         region_init(&draw_region);
         region_add(&draw_region, &drawable->bbox);
-        add_clip_rects(&clip_rgn, drawable->clip.rects);
+        region_add_clip_rects(&clip_rgn, drawable->clip.rects);
         region_and(&draw_region, &clip_rgn);
         if (lossy) {
             region_or(surface_lossy_region, &draw_region);
@@ -8051,10 +7032,10 @@ void display_channel_destroy_surface_wait(DisplayChannel *display, int surface_i
         return;
 
     red_handle_depends_on_target_surface(display, surface_id);
-    /* note that red_handle_depends_on_target_surface must be called before current_clear.
+    /* note that red_handle_depends_on_target_surface must be called before current_remove_all.
        otherwise "current" will hold items that other drawables may depend on, and then
-       current_clear will remove them from the pipe. */
-    current_clear(display, surface_id);
+       current_remove_all will remove them from the pipe. */
+    current_remove_all(display, surface_id);
     red_clear_surface_drawables_from_pipes(display, surface_id, TRUE);
 }
 
@@ -9067,4 +8048,11 @@ RedChannel* red_worker_get_display_channel(RedWorker *worker)
     spice_return_val_if_fail(worker, NULL);
 
     return RED_CHANNEL(worker->display_channel);
+}
+
+clockid_t red_worker_get_clockid(RedWorker *worker)
+{
+    spice_return_val_if_fail(worker, 0);
+
+    return worker->clockid;
 }

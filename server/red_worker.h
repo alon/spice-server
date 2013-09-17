@@ -115,6 +115,7 @@ RedChannel* red_worker_get_cursor_channel(RedWorker *worker);
 RedChannel* red_worker_get_display_channel(RedWorker *worker);
 GMainContext* red_worker_get_context(RedWorker *worker);
 void red_worker_print_stats(RedWorker *worker);
+clockid_t red_worker_get_clockid(RedWorker *worker);
 
 RedChannel *red_worker_new_channel(RedWorker *worker, int size,
                                    const char *name,
