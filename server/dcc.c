@@ -270,3 +270,564 @@ void dcc_destroy_surface(DisplayChannelClient *dcc, uint32_t surface_id)
     destroy = surface_destroy_item_new(channel, surface_id);
     red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &destroy->pipe_item);
 }
+
+/* if already exists, returns it. Otherwise allocates and adds it (1) to the ring tail
+   in the channel (2) to the Drawable*/
+static RedGlzDrawable *get_glz_drawable(DisplayChannelClient *dcc, Drawable *drawable)
+{
+    RedGlzDrawable *ret;
+    RingItem *item, *next;
+
+    // TODO - I don't really understand what's going on here, so doing the technical equivalent
+    // now that we have multiple glz_dicts, so the only way to go from dcc to drawable glz is to go
+    // over the glz_ring (unless adding some better data structure then a ring)
+    DRAWABLE_FOREACH_GLZ_SAFE(drawable, item, next, ret) {
+        if (ret->dcc == dcc) {
+            return ret;
+        }
+    }
+
+    ret = spice_new(RedGlzDrawable, 1);
+
+    ret->dcc = dcc;
+    ret->red_drawable = red_drawable_ref(drawable->red_drawable);
+    ret->drawable = drawable;
+    ret->group_id = drawable->group_id;
+    ret->instances_count = 0;
+    ring_init(&ret->instances);
+
+    ring_item_init(&ret->link);
+    ring_item_init(&ret->drawable_link);
+    ring_add_before(&ret->link, &dcc->glz_drawables);
+    ring_add(&drawable->glz_ring, &ret->drawable_link);
+    dcc->glz_drawable_count++;
+    return ret;
+}
+
+/* allocates new instance and adds it to instances in the given drawable.
+   NOTE - the caller should set the glz_instance returned by the encoder by itself.*/
+static GlzDrawableInstanceItem *add_glz_drawable_instance(RedGlzDrawable *glz_drawable)
+{
+    spice_assert(glz_drawable->instances_count < MAX_GLZ_DRAWABLE_INSTANCES);
+    // NOTE: We assume the additions are performed consecutively, without removals in the middle
+    GlzDrawableInstanceItem *ret = glz_drawable->instances_pool + glz_drawable->instances_count;
+    glz_drawable->instances_count++;
+
+    ring_item_init(&ret->free_link);
+    ring_item_init(&ret->glz_link);
+    ring_add(&glz_drawable->instances, &ret->glz_link);
+    ret->glz_instance = NULL;
+    ret->red_glz_drawable = glz_drawable;
+
+    return ret;
+}
+
+#define MIN_GLZ_SIZE_FOR_ZLIB 100
+
+int dcc_compress_image_glz(DisplayChannelClient *dcc,
+                           SpiceImage *dest, SpiceBitmap *src, Drawable *drawable,
+                           compress_send_data_t* o_comp_data)
+{
+    DisplayChannel *display_channel = DCC_TO_DC(dcc);
+#ifdef COMPRESS_STAT
+    stat_time_t start_time = stat_now(worker);
+#endif
+    spice_assert(bitmap_fmt_is_rgb(src->format));
+    GlzData *glz_data = &dcc->glz_data;
+    ZlibData *zlib_data;
+    LzImageType type = MAP_BITMAP_FMT_TO_LZ_IMAGE_TYPE[src->format];
+    RedGlzDrawable *glz_drawable;
+    GlzDrawableInstanceItem *glz_drawable_instance;
+    int glz_size;
+    int zlib_size;
+
+    glz_data->data.bufs_tail = compress_buf_new();
+    glz_data->data.bufs_head = glz_data->data.bufs_tail;
+    glz_data->data.dcc = dcc;
+
+    glz_drawable = get_glz_drawable(dcc, drawable);
+    glz_drawable_instance = add_glz_drawable_instance(glz_drawable);
+
+    glz_data->data.u.lines_data.chunks = src->data;
+    glz_data->data.u.lines_data.stride = src->stride;
+    glz_data->data.u.lines_data.next = 0;
+    glz_data->data.u.lines_data.reverse = 0;
+    /* fixme: remove? glz_data->usr.more_lines = glz_usr_more_lines; */
+
+    glz_size = glz_encode(dcc->glz, type, src->x, src->y,
+                          (src->flags & SPICE_BITMAP_FLAGS_TOP_DOWN), NULL, 0,
+                          src->stride, glz_data->data.bufs_head->buf,
+                          sizeof(glz_data->data.bufs_head->buf),
+                          glz_drawable_instance,
+                          &glz_drawable_instance->glz_instance);
+
+    stat_compress_add(&display_channel->glz_stat, start_time, src->stride * src->y, glz_size);
+
+    if (!display_channel->enable_zlib_glz_wrap || (glz_size < MIN_GLZ_SIZE_FOR_ZLIB)) {
+        goto glz;
+    }
+#ifdef COMPRESS_STAT
+    start_time = stat_now(worker);
+#endif
+    zlib_data = &dcc->zlib_data;
+
+    zlib_data->data.bufs_tail = compress_buf_new();
+    zlib_data->data.bufs_head = zlib_data->data.bufs_tail;
+    zlib_data->data.dcc = dcc;
+
+    zlib_data->data.u.compressed_data.next = glz_data->data.bufs_head;
+    zlib_data->data.u.compressed_data.size_left = glz_size;
+
+    zlib_size = zlib_encode(dcc->zlib, dcc->zlib_level,
+                            glz_size, (uint8_t*)zlib_data->data.bufs_head->buf,
+                            sizeof(zlib_data->data.bufs_head->buf));
+
+    // the compressed buffer is bigger than the original data
+    if (zlib_size >= glz_size) {
+        while (zlib_data->data.bufs_head) {
+            RedCompressBuf *buf = zlib_data->data.bufs_head;
+            zlib_data->data.bufs_head = buf->send_next;
+            compress_buf_free(buf);
+        }
+        goto glz;
+    }
+
+    dest->descriptor.type = SPICE_IMAGE_TYPE_ZLIB_GLZ_RGB;
+    dest->u.zlib_glz.glz_data_size = glz_size;
+    dest->u.zlib_glz.data_size = zlib_size;
+
+    o_comp_data->comp_buf = zlib_data->data.bufs_head;
+    o_comp_data->comp_buf_size = zlib_size;
+
+    stat_compress_add(&display_channel->zlib_glz_stat, start_time, glz_size, zlib_size);
+    return TRUE;
+glz:
+    dest->descriptor.type = SPICE_IMAGE_TYPE_GLZ_RGB;
+    dest->u.lz_rgb.data_size = glz_size;
+
+    o_comp_data->comp_buf = glz_data->data.bufs_head;
+    o_comp_data->comp_buf_size = glz_size;
+
+    return TRUE;
+}
+
+int dcc_compress_image_lz(DisplayChannelClient *dcc,
+                          SpiceImage *dest, SpiceBitmap *src,
+                          compress_send_data_t* o_comp_data, uint32_t group_id)
+{
+    LzData *lz_data = &dcc->lz_data;
+    LzContext *lz = dcc->lz;
+    LzImageType type = MAP_BITMAP_FMT_TO_LZ_IMAGE_TYPE[src->format];
+    int size;            // size of the compressed data
+
+#ifdef COMPRESS_STAT
+    stat_time_t start_time = stat_now(worker);
+#endif
+
+    lz_data->data.bufs_tail = compress_buf_new();
+    lz_data->data.bufs_head = lz_data->data.bufs_tail;
+    lz_data->data.dcc = dcc;
+
+    if (setjmp(lz_data->data.jmp_env)) {
+        while (lz_data->data.bufs_head) {
+            RedCompressBuf *buf = lz_data->data.bufs_head;
+            lz_data->data.bufs_head = buf->send_next;
+            compress_buf_free(buf);
+        }
+        return FALSE;
+    }
+
+    lz_data->data.u.lines_data.chunks = src->data;
+    lz_data->data.u.lines_data.stride = src->stride;
+    lz_data->data.u.lines_data.next = 0;
+    lz_data->data.u.lines_data.reverse = 0;
+    /* fixme: remove? lz_data->usr.more_lines = lz_usr_more_lines; */
+
+    size = lz_encode(lz, type, src->x, src->y,
+                     !!(src->flags & SPICE_BITMAP_FLAGS_TOP_DOWN),
+                     NULL, 0, src->stride,
+                     lz_data->data.bufs_head->buf,
+                     sizeof(lz_data->data.bufs_head->buf));
+
+    // the compressed buffer is bigger than the original data
+    if (size > (src->y * src->stride)) {
+        longjmp(lz_data->data.jmp_env, 1);
+    }
+
+    if (bitmap_fmt_is_rgb(src->format)) {
+        dest->descriptor.type = SPICE_IMAGE_TYPE_LZ_RGB;
+        dest->u.lz_rgb.data_size = size;
+
+        o_comp_data->comp_buf = lz_data->data.bufs_head;
+        o_comp_data->comp_buf_size = size;
+    } else {
+        /* masks are 1BIT bitmaps without palettes, but they are not compressed
+         * (see fill_mask) */
+        spice_assert(src->palette);
+        dest->descriptor.type = SPICE_IMAGE_TYPE_LZ_PLT;
+        dest->u.lz_plt.data_size = size;
+        dest->u.lz_plt.flags = src->flags & SPICE_BITMAP_FLAGS_TOP_DOWN;
+        dest->u.lz_plt.palette = src->palette;
+        dest->u.lz_plt.palette_id = src->palette->unique;
+        o_comp_data->comp_buf = lz_data->data.bufs_head;
+        o_comp_data->comp_buf_size = size;
+
+        dcc_palette_cache_palette(dcc, dest->u.lz_plt.palette, &(dest->u.lz_plt.flags));
+        o_comp_data->lzplt_palette = dest->u.lz_plt.palette;
+    }
+
+    stat_compress_add(&display_channel->lz_stat, start_time, src->stride * src->y,
+                      o_comp_data->comp_buf_size);
+    return TRUE;
+}
+
+int dcc_compress_image_jpeg(DisplayChannelClient *dcc, SpiceImage *dest,
+                            SpiceBitmap *src, compress_send_data_t* o_comp_data,
+                            uint32_t group_id)
+{
+    JpegData *jpeg_data = &dcc->jpeg_data;
+    LzData *lz_data = &dcc->lz_data;
+    JpegEncoderContext *jpeg = dcc->jpeg;
+    LzContext *lz = dcc->lz;
+    volatile JpegEncoderImageType jpeg_in_type;
+    int jpeg_size = 0;
+    volatile int has_alpha = FALSE;
+    int alpha_lz_size = 0;
+    int comp_head_filled;
+    int comp_head_left;
+    int stride;
+    uint8_t *lz_out_start_byte;
+
+#ifdef COMPRESS_STAT
+    stat_time_t start_time = stat_now(worker);
+#endif
+    switch (src->format) {
+    case SPICE_BITMAP_FMT_16BIT:
+        jpeg_in_type = JPEG_IMAGE_TYPE_RGB16;
+        break;
+    case SPICE_BITMAP_FMT_24BIT:
+        jpeg_in_type = JPEG_IMAGE_TYPE_BGR24;
+        break;
+    case SPICE_BITMAP_FMT_32BIT:
+        jpeg_in_type = JPEG_IMAGE_TYPE_BGRX32;
+        break;
+    case SPICE_BITMAP_FMT_RGBA:
+        jpeg_in_type = JPEG_IMAGE_TYPE_BGRX32;
+        has_alpha = TRUE;
+        break;
+    default:
+        return FALSE;
+    }
+
+    jpeg_data->data.bufs_tail = compress_buf_new();
+    jpeg_data->data.bufs_head = jpeg_data->data.bufs_tail;
+    jpeg_data->data.dcc = dcc;
+
+    if (setjmp(jpeg_data->data.jmp_env)) {
+        while (jpeg_data->data.bufs_head) {
+            RedCompressBuf *buf = jpeg_data->data.bufs_head;
+            jpeg_data->data.bufs_head = buf->send_next;
+            compress_buf_free(buf);
+        }
+        return FALSE;
+    }
+
+    if (src->data->flags & SPICE_CHUNKS_FLAGS_UNSTABLE) {
+        spice_chunks_linearize(src->data);
+    }
+
+    jpeg_data->data.u.lines_data.chunks = src->data;
+    jpeg_data->data.u.lines_data.stride = src->stride;
+    /* fixme: remove? jpeg_data->usr.more_lines = jpeg_usr_more_lines; */
+    if ((src->flags & SPICE_BITMAP_FLAGS_TOP_DOWN)) {
+        jpeg_data->data.u.lines_data.next = 0;
+        jpeg_data->data.u.lines_data.reverse = 0;
+        stride = src->stride;
+    } else {
+        jpeg_data->data.u.lines_data.next = src->data->num_chunks - 1;
+        jpeg_data->data.u.lines_data.reverse = 1;
+        stride = -src->stride;
+    }
+    jpeg_size = jpeg_encode(jpeg, dcc->jpeg_quality, jpeg_in_type,
+                            src->x, src->y, NULL,
+                            0, stride, jpeg_data->data.bufs_head->buf,
+                            sizeof(jpeg_data->data.bufs_head->buf));
+
+    // the compressed buffer is bigger than the original data
+    if (jpeg_size > (src->y * src->stride)) {
+        longjmp(jpeg_data->data.jmp_env, 1);
+    }
+
+    if (!has_alpha) {
+        dest->descriptor.type = SPICE_IMAGE_TYPE_JPEG;
+        dest->u.jpeg.data_size = jpeg_size;
+
+        o_comp_data->comp_buf = jpeg_data->data.bufs_head;
+        o_comp_data->comp_buf_size = jpeg_size;
+        o_comp_data->is_lossy = TRUE;
+
+        stat_compress_add(&display_channel->jpeg_stat, start_time, src->stride * src->y,
+                          o_comp_data->comp_buf_size);
+        return TRUE;
+    }
+
+    lz_data->data.bufs_head = jpeg_data->data.bufs_tail;
+    lz_data->data.bufs_tail = lz_data->data.bufs_head;
+
+    comp_head_filled = jpeg_size % sizeof(lz_data->data.bufs_head->buf);
+    comp_head_left = sizeof(lz_data->data.bufs_head->buf) - comp_head_filled;
+    lz_out_start_byte = lz_data->data.bufs_head->buf + comp_head_filled;
+
+    lz_data->data.dcc = dcc;
+
+    lz_data->data.u.lines_data.chunks = src->data;
+    lz_data->data.u.lines_data.stride = src->stride;
+    lz_data->data.u.lines_data.next = 0;
+    lz_data->data.u.lines_data.reverse = 0;
+    /* fixme: remove? lz_data->usr.more_lines = lz_usr_more_lines; */
+
+    alpha_lz_size = lz_encode(lz, LZ_IMAGE_TYPE_XXXA, src->x, src->y,
+                               !!(src->flags & SPICE_BITMAP_FLAGS_TOP_DOWN),
+                               NULL, 0, src->stride,
+                               lz_out_start_byte,
+                               comp_head_left);
+
+    // the compressed buffer is bigger than the original data
+    if ((jpeg_size + alpha_lz_size) > (src->y * src->stride)) {
+        longjmp(jpeg_data->data.jmp_env, 1);
+    }
+
+    dest->descriptor.type = SPICE_IMAGE_TYPE_JPEG_ALPHA;
+    dest->u.jpeg_alpha.flags = 0;
+    if (src->flags & SPICE_BITMAP_FLAGS_TOP_DOWN) {
+        dest->u.jpeg_alpha.flags |= SPICE_JPEG_ALPHA_FLAGS_TOP_DOWN;
+    }
+
+    dest->u.jpeg_alpha.jpeg_size = jpeg_size;
+    dest->u.jpeg_alpha.data_size = jpeg_size + alpha_lz_size;
+
+    o_comp_data->comp_buf = jpeg_data->data.bufs_head;
+    o_comp_data->comp_buf_size = jpeg_size + alpha_lz_size;
+    o_comp_data->is_lossy = TRUE;
+    stat_compress_add(&display_channel->jpeg_alpha_stat, start_time, src->stride * src->y,
+                      o_comp_data->comp_buf_size);
+    return TRUE;
+}
+
+int dcc_compress_image_quic(DisplayChannelClient *dcc, SpiceImage *dest,
+                            SpiceBitmap *src, compress_send_data_t* o_comp_data,
+                            uint32_t group_id)
+{
+    QuicData *quic_data = &dcc->quic_data;
+    QuicContext *quic = dcc->quic;
+    volatile QuicImageType type;
+    int size, stride;
+
+#ifdef COMPRESS_STAT
+    stat_time_t start_time = stat_now(worker);
+#endif
+
+    switch (src->format) {
+    case SPICE_BITMAP_FMT_32BIT:
+        type = QUIC_IMAGE_TYPE_RGB32;
+        break;
+    case SPICE_BITMAP_FMT_RGBA:
+        type = QUIC_IMAGE_TYPE_RGBA;
+        break;
+    case SPICE_BITMAP_FMT_16BIT:
+        type = QUIC_IMAGE_TYPE_RGB16;
+        break;
+    case SPICE_BITMAP_FMT_24BIT:
+        type = QUIC_IMAGE_TYPE_RGB24;
+        break;
+    default:
+        return FALSE;
+    }
+
+    quic_data->data.bufs_tail = compress_buf_new();
+    quic_data->data.bufs_head = quic_data->data.bufs_tail;
+    quic_data->data.dcc = dcc;
+
+    if (setjmp(quic_data->data.jmp_env)) {
+        while (quic_data->data.bufs_head) {
+            RedCompressBuf *buf = quic_data->data.bufs_head;
+            quic_data->data.bufs_head = buf->send_next;
+            compress_buf_free(buf);
+        }
+        return FALSE;
+    }
+
+    if (src->data->flags & SPICE_CHUNKS_FLAGS_UNSTABLE) {
+        spice_chunks_linearize(src->data);
+    }
+
+    quic_data->data.u.lines_data.chunks = src->data;
+    quic_data->data.u.lines_data.stride = src->stride;
+    /* fixme: remove? quic_data->usr.more_lines = quic_usr_more_lines; */
+    if ((src->flags & SPICE_BITMAP_FLAGS_TOP_DOWN)) {
+        quic_data->data.u.lines_data.next = 0;
+        quic_data->data.u.lines_data.reverse = 0;
+        stride = src->stride;
+    } else {
+        quic_data->data.u.lines_data.next = src->data->num_chunks - 1;
+        quic_data->data.u.lines_data.reverse = 1;
+        stride = -src->stride;
+    }
+    size = quic_encode(quic, type, src->x, src->y, NULL, 0, stride,
+                       (uint32_t*)quic_data->data.bufs_head->buf,
+                       sizeof(quic_data->data.bufs_head->buf) / sizeof(uint32_t));
+
+    // the compressed buffer is bigger than the original data
+    if ((size << 2) > (src->y * src->stride)) {
+        longjmp(quic_data->data.jmp_env, 1);
+    }
+
+    dest->descriptor.type = SPICE_IMAGE_TYPE_QUIC;
+    dest->u.quic.data_size = size << 2;
+
+    o_comp_data->comp_buf = quic_data->data.bufs_head;
+    o_comp_data->comp_buf_size = size << 2;
+
+    stat_compress_add(&display_channel->quic_stat, start_time, src->stride * src->y,
+                      o_comp_data->comp_buf_size);
+    return TRUE;
+}
+
+#define MIN_SIZE_TO_COMPRESS 54
+#define MIN_DIMENSION_TO_QUIC 3
+int dcc_compress_image(DisplayChannelClient *dcc,
+                       SpiceImage *dest, SpiceBitmap *src, Drawable *drawable,
+                       int can_lossy,
+                       compress_send_data_t* o_comp_data)
+{
+    DisplayChannel *display_channel = DCC_TO_DC(dcc);
+    spice_image_compression_t image_compression = dcc->image_compression;
+    int quic_compress = FALSE;
+
+    if ((image_compression == SPICE_IMAGE_COMPRESS_OFF) ||
+        ((src->y * src->stride) < MIN_SIZE_TO_COMPRESS)) { // TODO: change the size cond
+        return FALSE;
+    } else if (image_compression == SPICE_IMAGE_COMPRESS_QUIC) {
+        if (bitmap_fmt_is_plt(src->format)) {
+            return FALSE;
+        } else {
+            quic_compress = TRUE;
+        }
+    } else {
+        /*
+            lz doesn't handle (1) bitmaps with strides that are larger than the width
+            of the image in bytes (2) unstable bitmaps
+        */
+        if (bitmap_has_extra_stride(src) || (src->data->flags & SPICE_CHUNKS_FLAGS_UNSTABLE)) {
+            if ((image_compression == SPICE_IMAGE_COMPRESS_LZ) ||
+                (image_compression == SPICE_IMAGE_COMPRESS_GLZ) ||
+                bitmap_fmt_is_plt(src->format)) {
+                return FALSE;
+            } else {
+                quic_compress = TRUE;
+            }
+        } else {
+            if ((image_compression == SPICE_IMAGE_COMPRESS_AUTO_LZ) ||
+                (image_compression == SPICE_IMAGE_COMPRESS_AUTO_GLZ)) {
+                if ((src->x < MIN_DIMENSION_TO_QUIC) || (src->y < MIN_DIMENSION_TO_QUIC)) {
+                    quic_compress = FALSE;
+                } else {
+                    if (drawable->copy_bitmap_graduality == BITMAP_GRADUAL_INVALID) {
+                        quic_compress = bitmap_fmt_has_graduality(src->format) &&
+                            bitmap_get_graduality_level(src) == BITMAP_GRADUAL_HIGH;
+                    } else {
+                        quic_compress = (drawable->copy_bitmap_graduality == BITMAP_GRADUAL_HIGH);
+                    }
+                }
+            } else {
+                quic_compress = FALSE;
+            }
+        }
+    }
+
+    if (quic_compress) {
+#ifdef COMPRESS_DEBUG
+        spice_info("QUIC compress");
+#endif
+        // if bitmaps is picture-like, compress it using jpeg
+        if (can_lossy && display_channel->enable_jpeg &&
+            ((image_compression == SPICE_IMAGE_COMPRESS_AUTO_LZ) ||
+            (image_compression == SPICE_IMAGE_COMPRESS_AUTO_GLZ))) {
+            // if we use lz for alpha, the stride can't be extra
+            if (src->format != SPICE_BITMAP_FMT_RGBA || !bitmap_has_extra_stride(src)) {
+                return dcc_compress_image_jpeg(dcc, dest,
+                                               src, o_comp_data, drawable->group_id);
+            }
+        }
+        return dcc_compress_image_quic(dcc, dest,
+                                       src, o_comp_data, drawable->group_id);
+    } else {
+        int glz;
+        int ret;
+        if ((image_compression == SPICE_IMAGE_COMPRESS_AUTO_GLZ) ||
+            (image_compression == SPICE_IMAGE_COMPRESS_GLZ)) {
+            glz = bitmap_fmt_has_graduality(src->format) && (
+                    (src->x * src->y) < glz_enc_dictionary_get_size(
+                        dcc->glz_dict->dict));
+        } else if ((image_compression == SPICE_IMAGE_COMPRESS_AUTO_LZ) ||
+                   (image_compression == SPICE_IMAGE_COMPRESS_LZ)) {
+            glz = FALSE;
+        } else {
+            spice_error("invalid image compression type %u", image_compression);
+            return FALSE;
+        }
+
+        if (glz) {
+            /* using the global dictionary only if it is not frozen */
+            pthread_rwlock_rdlock(&dcc->glz_dict->encode_lock);
+            if (!dcc->glz_dict->migrate_freeze) {
+                ret = dcc_compress_image_glz(dcc,
+                                             dest, src,
+                                             drawable, o_comp_data);
+            } else {
+                glz = FALSE;
+            }
+            pthread_rwlock_unlock(&dcc->glz_dict->encode_lock);
+        }
+
+        if (!glz) {
+            ret = dcc_compress_image_lz(dcc, dest, src, o_comp_data,
+                                        drawable->group_id);
+#ifdef COMPRESS_DEBUG
+            spice_info("LZ LOCAL compress");
+#endif
+        }
+#ifdef COMPRESS_DEBUG
+        else {
+            spice_info("LZ global compress fmt=%d", src->format);
+        }
+#endif
+        return ret;
+    }
+}
+
+#define CLIENT_PALETTE_CACHE
+#include "cache_item.tmpl.c"
+#undef CLIENT_PALETTE_CACHE
+
+void dcc_palette_cache_palette(DisplayChannelClient *dcc, SpicePalette *palette,
+                               uint8_t *flags)
+{
+    if (palette == NULL) {
+        return;
+    }
+    if (palette->unique) {
+        if (red_palette_cache_find(dcc, palette->unique)) {
+            *flags |= SPICE_BITMAP_FLAGS_PAL_FROM_CACHE;
+            return;
+        }
+        if (red_palette_cache_add(dcc, palette->unique, 1)) {
+            *flags |= SPICE_BITMAP_FLAGS_PAL_CACHE_ME;
+        }
+    }
+}
+
+void dcc_palette_cache_reset(DisplayChannelClient *dcc)
+{
+    red_palette_cache_reset(dcc, CLIENT_PALETTE_CACHE_SIZE);
+}
