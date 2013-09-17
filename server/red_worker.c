@@ -1167,8 +1167,8 @@ static void exclude_region(DisplayChannel *display, Ring *ring, RingItem *ring_i
     }
 }
 
-static void __current_add_drawable(DisplayChannel *display,
-                                   Drawable *drawable, RingItem *pos)
+static void current_add_drawable(DisplayChannel *display,
+                                 Drawable *drawable, RingItem *pos)
 {
     RedSurface *surface;
     uint32_t surface_id = drawable->surface_id;
@@ -1957,7 +1957,7 @@ static inline int red_current_add_equal(DisplayChannel *display, DrawItem *item,
         int add_after = !!other_drawable->stream &&
                         is_drawable_independent_from_surfaces(drawable);
         display_channel_stream_maintenance(display, drawable, other_drawable);
-        __current_add_drawable(display, drawable, &other->siblings_link);
+        current_add_drawable(display, drawable, &other->siblings_link);
         other_drawable->refs++;
         current_remove_drawable(display, other_drawable);
         if (add_after) {
@@ -2015,7 +2015,7 @@ static inline int red_current_add_equal(DisplayChannel *display, DrawItem *item,
         break;
     case QXL_EFFECT_OPAQUE_BRUSH:
         if (is_same_geometry(drawable, other_drawable)) {
-            __current_add_drawable(display, drawable, &other->siblings_link);
+            current_add_drawable(display, drawable, &other->siblings_link);
             remove_drawable(display, other_drawable);
             red_pipes_add_drawable(display, drawable);
             return TRUE;
@@ -2085,7 +2085,7 @@ static void red_use_stream_trace(DisplayChannel *display, Drawable *drawable)
     }
 }
 
-static inline int red_current_add(DisplayChannel *display, Ring *ring, Drawable *drawable)
+static int current_add(DisplayChannel *display, Ring *ring, Drawable *drawable)
 {
     DrawItem *item = &drawable->tree_item;
 #ifdef RED_WORKER_STAT
@@ -2095,7 +2095,7 @@ static inline int red_current_add(DisplayChannel *display, Ring *ring, Drawable 
     QRegion exclude_rgn;
     RingItem *exclude_base = NULL;
 
-    spice_assert(!region_is_empty(&item->base.rgn));
+    spice_return_val_if_fail(!region_is_empty(&item->base.rgn), FALSE);
     region_init(&exclude_rgn);
     now = ring_next(ring, ring);
 
@@ -2187,14 +2187,14 @@ static inline int red_current_add(DisplayChannel *display, Ring *ring, Drawable 
          * safety (todo: Not sure if exclude_region can affect the drawable
          * if it is added to the tree before calling exclude_region).
          */
-        __current_add_drawable(display, drawable, ring);
+        current_add_drawable(display, drawable, ring);
     } else {
         /*
          * red_detach_streams_behind can affect the current tree since it may
          * trigger calls to update_area. Thus, the drawable should be added to the tree
          * before calling red_detach_streams_behind
          */
-        __current_add_drawable(display, drawable, ring);
+        current_add_drawable(display, drawable, ring);
         if (is_primary_surface(display, drawable->surface_id)) {
             detach_streams_behind(display, &drawable->tree_item.base.rgn, drawable);
         }
@@ -2213,7 +2213,7 @@ static void add_clip_rects(QRegion *rgn, SpiceClipRects *data)
     }
 }
 
-static int red_current_add_with_shadow(DisplayChannel *display, Ring *ring, Drawable *item)
+static int current_add_with_shadow(DisplayChannel *display, Ring *ring, Drawable *item)
 {
 #ifdef RED_WORKER_STAT
     stat_time_t start_time = stat_now(worker);
@@ -2240,7 +2240,7 @@ static int red_current_add_with_shadow(DisplayChannel *display, Ring *ring, Draw
     }
 
     ring_add(ring, &shadow->base.siblings_link);
-    __current_add_drawable(display, item, ring);
+    current_add_drawable(display, item, ring);
     if (item->tree_item.effect == QXL_EFFECT_OPAQUE) {
         QRegion exclude_rgn;
         region_clone(&exclude_rgn, &item->tree_item.base.rgn);
@@ -2335,10 +2335,10 @@ void red_worker_print_stats(RedWorker *worker)
     Ring *ring = &display->surfaces[surface_id].current;
 
     if (has_shadow(red_drawable)) {
-        ret = red_current_add_with_shadow(display, ring, drawable);
+        ret = current_add_with_shadow(display, ring, drawable);
     } else {
         drawable_update_streamable(display, drawable);
-        ret = red_current_add(display, ring, drawable);
+        ret = current_add(display, ring, drawable);
     }
 
     red_worker_print_stats(COMMON_CHANNEL(display)->worker);
