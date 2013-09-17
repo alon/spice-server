@@ -57,6 +57,12 @@ typedef struct RedDrawable {
     } u;
 } RedDrawable;
 
+static inline RedDrawable *red_drawable_ref(RedDrawable *drawable)
+{
+    drawable->refs++;
+    return drawable;
+}
+
 typedef struct RedUpdateCmd {
     QXLReleaseInfo *release_info;
     SpiceRect area;
