@@ -67,7 +67,6 @@
 
 //#define COMPRESS_STAT
 //#define DUMP_BITMAP
-//#define RED_WORKER_STAT
 //#define COMPRESS_DEBUG
 
 #define CMD_RING_POLL_TIMEOUT 10 //milli
@@ -106,111 +105,6 @@ static void rendering_incorrect(const char *msg)
 {
     spice_warning("rendering incorrect from now on: %s", msg);
 }
-
-#if defined(RED_WORKER_STAT) || defined(COMPRESS_STAT)
-
-typedef unsigned long stat_time_t;
-
-static stat_time_t stat_now(RedWorker *worker)
-{
-    clockid_t clock_id = worker->clockid;
-    struct timespec ts;
-
-    clock_gettime(clock_id, &ts);
-    return ts.tv_nsec + ts.tv_sec * 1000 * 1000 * 1000;
-}
-
-double stat_cpu_time_to_sec(stat_time_t time)
-{
-    return (double)time / (1000 * 1000 * 1000);
-}
-
-typedef struct stat_info_s {
-    const char *name;
-    uint32_t count;
-    stat_time_t max;
-    stat_time_t min;
-    stat_time_t total;
-#ifdef COMPRESS_STAT
-    uint64_t orig_size;
-    uint64_t comp_size;
-#endif
-} stat_info_t;
-
-static inline void stat_reset(stat_info_t *info)
-{
-    info->count = info->max = info->total = 0;
-    info->min = ~(stat_time_t)0;
-#ifdef COMPRESS_STAT
-    info->orig_size = info->comp_size = 0;
-#endif
-}
-
-#endif
-
-#ifdef RED_WORKER_STAT
-static const char *add_stat_name = "add";
-static const char *exclude_stat_name = "exclude";
-static const char *__exclude_stat_name = "__exclude";
-
-static inline void stat_init(stat_info_t *info, const char *name)
-{
-    info->name = name;
-    stat_reset(info);
-}
-
-static inline void stat_add(RedWorker *worker, stat_info_t *info, stat_time_t start)
-{
-    stat_time_t time;
-    ++info->count;
-    time = stat_now(worker) - start;
-    info->total += time;
-    info->max = MAX(info->max, time);
-    info->min = MIN(info->min, time);
-}
-
-#else
-#define stat_add(a, b)
-#define stat_init(a, b)
-#endif
-
-#ifdef COMPRESS_STAT
-static const char *lz_stat_name = "lz";
-static const char *glz_stat_name = "glz";
-static const char *quic_stat_name = "quic";
-static const char *jpeg_stat_name = "jpeg";
-static const char *zlib_stat_name = "zlib_glz";
-static const char *jpeg_alpha_stat_name = "jpeg_alpha";
-
-static inline void stat_compress_init(stat_info_t *info, const char *name)
-{
-    info->name = name;
-    stat_reset(info);
-}
-
-static inline void stat_compress_add(RedWorker *worker, stat_info_t *info,
-                                     stat_time_t start, int orig_size,
-                                     int comp_size)
-{
-    stat_time_t time;
-    ++info->count;
-    time = stat_now(worker) - start;
-    info->total += time;
-    info->max = MAX(info->max, time);
-    info->min = MIN(info->min, time);
-    info->orig_size += orig_size;
-    info->comp_size += comp_size;
-}
-
-double inline stat_byte_to_mega(uint64_t size)
-{
-    return (double)size / (1000 * 1000);
-}
-
-#else
-#define stat_compress_init(a, b)
-#define stat_compress_add(a, b, c, d)
-#endif
 
 #define MAX_EVENT_SOURCES 20
 
@@ -263,13 +157,6 @@ typedef struct RedWorker {
     spice_wan_compression_t zlib_glz_state;
 
     uint32_t process_commands_generation;
-#ifdef RED_WORKER_STAT
-    stat_info_t add_stat;
-    stat_info_t exclude_stat;
-    stat_info_t __exclude_stat;
-    uint32_t add_count;
-    uint32_t add_with_shadow_count;
-#endif
 #ifdef RED_STATISTICS
     StatNodeRef stat;
     uint64_t *wakeup_counter;
@@ -1042,7 +929,8 @@ static void __exclude_region(DisplayChannel *display, Ring *ring, TreeItem *item
 {
     QRegion and_rgn;
 #ifdef RED_WORKER_STAT
-    stat_time_t start_time = stat_now(worker);
+    RedWorker *worker = COMMON_CHANNEL(display)->worker;
+    stat_time_t start_time = stat_now(worker->clockid);
 #endif
 
     region_clone(&and_rgn, rgn);
@@ -1105,14 +993,15 @@ static void __exclude_region(DisplayChannel *display, Ring *ring, TreeItem *item
         }
     }
     region_destroy(&and_rgn);
-    stat_add(&worker->__exclude_stat, start_time);
+    stat_add(&display->__exclude_stat, start_time);
 }
 
 static void exclude_region(DisplayChannel *display, Ring *ring, RingItem *ring_item,
                            QRegion *rgn, TreeItem **last, Drawable *frame_candidate)
 {
 #ifdef RED_WORKER_STAT
-    stat_time_t start_time = stat_now(worker);
+    RedWorker *worker = COMMON_CHANNEL(display)->worker;
+    stat_time_t start_time = stat_now(worker->clockid);
 #endif
     Ring *top_ring;
 
@@ -1149,7 +1038,7 @@ static void exclude_region(DisplayChannel *display, Ring *ring, RingItem *ring_i
             }
 
             if (region_is_empty(rgn)) {
-                stat_add(&worker->exclude_stat, start_time);
+                stat_add(&display->exclude_stat, start_time);
                 return;
             }
         }
@@ -1157,7 +1046,7 @@ static void exclude_region(DisplayChannel *display, Ring *ring, RingItem *ring_i
         while ((last && *last == (TreeItem *)ring_item) ||
                !(ring_item = ring_next(ring, ring_item))) {
             if (ring == top_ring) {
-                stat_add(&worker->exclude_stat, start_time);
+                stat_add(&display->exclude_stat, start_time);
                 return;
             }
             ring_item = &container->base.siblings_link;
@@ -2089,7 +1978,8 @@ static int current_add(DisplayChannel *display, Ring *ring, Drawable *drawable)
 {
     DrawItem *item = &drawable->tree_item;
 #ifdef RED_WORKER_STAT
-    stat_time_t start_time = stat_now(worker);
+    RedWorker *worker = COMMON_CHANNEL(display)->worker;
+    stat_time_t start_time = stat_now(worker->clockid);
 #endif
     RingItem *now;
     QRegion exclude_rgn;
@@ -2115,7 +2005,7 @@ static int current_add(DisplayChannel *display, Ring *ring, Drawable *drawable)
             if (!(test_res & REGION_TEST_RIGHT_EXCLUSIVE) &&
                                                    !(test_res & REGION_TEST_LEFT_EXCLUSIVE) &&
                                                    red_current_add_equal(display, item, sibling)) {
-                stat_add(&worker->add_stat, start_time);
+                stat_add(&display->add_stat, start_time);
                 return FALSE;
             }
 
@@ -2200,7 +2090,7 @@ static int current_add(DisplayChannel *display, Ring *ring, Drawable *drawable)
         }
     }
     region_destroy(&exclude_rgn);
-    stat_add(&worker->add_stat, start_time);
+    stat_add(&display->add_stat, start_time);
     return TRUE;
 }
 
@@ -2216,8 +2106,9 @@ static void add_clip_rects(QRegion *rgn, SpiceClipRects *data)
 static int current_add_with_shadow(DisplayChannel *display, Ring *ring, Drawable *item)
 {
 #ifdef RED_WORKER_STAT
-    stat_time_t start_time = stat_now(worker);
-    ++worker->add_with_shadow_count;
+    RedWorker *worker = COMMON_CHANNEL(display)->worker;
+    stat_time_t start_time = stat_now(worker->clockid);
+    ++display->add_with_shadow_count;
 #endif
 
     RedDrawable *red_drawable = item->red_drawable;
@@ -2228,7 +2119,7 @@ static int current_add_with_shadow(DisplayChannel *display, Ring *ring, Drawable
 
     Shadow *shadow = shadow_new(&item->tree_item, &delta);
     if (!shadow) {
-        stat_add(&worker->add_stat, start_time);
+        stat_add(&display->add_stat, start_time);
         return FALSE;
     }
     // item and his shadow must initially be placed in the same container.
@@ -2252,7 +2143,7 @@ static int current_add_with_shadow(DisplayChannel *display, Ring *ring, Drawable
             detach_streams_behind(display, &item->tree_item.base.rgn, item);
         }
     }
-    stat_add(&worker->add_stat, start_time);
+    stat_add(&display->add_stat, start_time);
     return TRUE;
 }
 
@@ -2300,31 +2191,29 @@ static void drawable_update_streamable(DisplayChannel *display, Drawable *drawab
     drawable->streamable = TRUE;
 }
 
-void red_worker_print_stats(RedWorker *worker)
+void print_stats(DisplayChannel *display)
 {
 #ifdef RED_WORKER_STAT
-    if ((++worker->add_count % 100) == 0) {
-        stat_time_t total = worker->add_stat.total;
-        spice_info("add with shadow count %u",
-                   worker->add_with_shadow_count);
-        worker->add_with_shadow_count = 0;
-        spice_info("add[%u] %f exclude[%u] %f __exclude[%u] %f",
-                   worker->add_stat.count,
-                   stat_cpu_time_to_sec(total),
-                   worker->exclude_stat.count,
-                   stat_cpu_time_to_sec(worker->exclude_stat.total),
-                   worker->__exclude_stat.count,
-                   stat_cpu_time_to_sec(worker->__exclude_stat.total));
-        spice_info("add %f%% exclude %f%% exclude2 %f%% __exclude %f%%",
-                   (double)(total - worker->exclude_stat.total) / total * 100,
-                   (double)(worker->exclude_stat.total) / total * 100,
-                   (double)(worker->exclude_stat.total -
-                            worker->__exclude_stat.total) / worker->exclude_stat.total * 100,
-                   (double)(worker->__exclude_stat.total) / worker->exclude_stat.total * 100);
-        stat_reset(&worker->add_stat);
-        stat_reset(&worker->exclude_stat);
-        stat_reset(&worker->__exclude_stat);
-    }
+    stat_time_t total = display->add_stat.total;
+    spice_info("add with shadow count %u",
+               display->add_with_shadow_count);
+    display->add_with_shadow_count = 0;
+    spice_info("add[%u] %f exclude[%u] %f __exclude[%u] %f",
+               display->add_stat.count,
+               stat_cpu_time_to_sec(total),
+               display->exclude_stat.count,
+               stat_cpu_time_to_sec(display->exclude_stat.total),
+               display->__exclude_stat.count,
+               stat_cpu_time_to_sec(display->__exclude_stat.total));
+    spice_info("add %f%% exclude %f%% exclude2 %f%% __exclude %f%%",
+               (double)(total - display->exclude_stat.total) / total * 100,
+               (double)(display->exclude_stat.total) / total * 100,
+               (double)(display->exclude_stat.total -
+                        display->__exclude_stat.total) / display->exclude_stat.total * 100,
+               (double)(display->__exclude_stat.total) / display->exclude_stat.total * 100);
+    stat_reset(&display->add_stat);
+    stat_reset(&display->exclude_stat);
+    stat_reset(&display->__exclude_stat);
 #endif
 }
 
@@ -2341,7 +2230,10 @@ void red_worker_print_stats(RedWorker *worker)
         ret = current_add(display, ring, drawable);
     }
 
-    red_worker_print_stats(COMMON_CHANNEL(display)->worker);
+#ifdef RED_WORKER_STAT
+    if ((++display->add_count % 100) == 0)
+        print_stats(display);
+#endif
     return ret;
 }
 
@@ -7909,6 +7801,9 @@ static void display_channel_create(RedWorker *worker, int migrate, uint32_t n_su
         return;
     }
     worker->display_channel = display_channel;
+    stat_init(&display_channel->add_stat, "add", worker->clockid);
+    stat_init(&display_channel->exclude_stat, "exclude", worker->clockid);
+    stat_init(&display_channel->__exclude_stat, "__exclude", worker->clockid);
 #ifdef RED_STATISTICS
     RedChannel *channel = RED_CHANNEL(display_channel);
     display_channel->cache_hits_counter = stat_add_counter(channel->stat,
@@ -7918,12 +7813,12 @@ static void display_channel_create(RedWorker *worker, int migrate, uint32_t n_su
     display_channel->non_cache_counter = stat_add_counter(channel->stat,
                                                           "non_cache", TRUE);
 #endif
-    stat_compress_init(&display_channel->lz_stat, lz_stat_name);
-    stat_compress_init(&display_channel->glz_stat, glz_stat_name);
-    stat_compress_init(&display_channel->quic_stat, quic_stat_name);
-    stat_compress_init(&display_channel->jpeg_stat, jpeg_stat_name);
-    stat_compress_init(&display_channel->zlib_glz_stat, zlib_stat_name);
-    stat_compress_init(&display_channel->jpeg_alpha_stat, jpeg_alpha_stat_name);
+    stat_compress_init(&display_channel->lz_stat, "lz");
+    stat_compress_init(&display_channel->glz_stat, "glz");
+    stat_compress_init(&display_channel->quic_stat, "quic");
+    stat_compress_init(&display_channel->jpeg_stat, "jpeg");
+    stat_compress_init(&display_channel->zlib_glz_stat, "zlib");
+    stat_compress_init(&display_channel->jpeg_alpha_stat, "jpeg_alpha");
 
     display_channel->n_surfaces = n_surfaces;
     display_channel->num_renderers = num_renderers;
@@ -9079,9 +8974,6 @@ RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher)
     worker->jpeg_state = jpeg_state;
     worker->zlib_glz_state = zlib_glz_state;
     worker->driver_cap_monitors_config = 0;
-    stat_init(&worker->add_stat, add_stat_name);
-    stat_init(&worker->exclude_stat, exclude_stat_name);
-    stat_init(&worker->__exclude_stat, __exclude_stat_name);
 #ifdef RED_STATISTICS
     char worker_str[20];
     sprintf(worker_str, "display[%d]", worker->qxl->id);

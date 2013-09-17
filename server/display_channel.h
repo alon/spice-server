@@ -293,6 +293,14 @@ struct DisplayChannel {
     ImageCache image_cache;
     RedCompressBuf *free_compress_bufs;
 
+/* TODO: some day unify this, make it more runtime.. */
+#ifdef RED_WORKER_STAT
+    stat_info_t add_stat;
+    stat_info_t exclude_stat;
+    stat_info_t __exclude_stat;
+    uint32_t add_count;
+    uint32_t add_with_shadow_count;
+#endif
 #ifdef RED_STATISTICS
     uint64_t *cache_hits_counter;
     uint64_t *add_to_cache_counter;
@@ -448,6 +456,5 @@ static inline int is_primary_surface(DisplayChannel *display, uint32_t surface_i
     }
     return FALSE;
 }
-
 
 #endif /* DISPLAY_CHANNEL_H_ */
