@@ -13,6 +13,10 @@
 #define PALETTE_CACHE_HASH_KEY(id) ((id) & PALETTE_CACHE_HASH_MASK)
 #define CLIENT_PALETTE_CACHE_SIZE 128
 
+#define DISPLAY_CLIENT_TIMEOUT 30000000000ULL //nano
+#define DISPLAY_CLIENT_MIGRATE_DATA_TIMEOUT 10000000000ULL //nano, 10 sec
+#define DISPLAY_CLIENT_RETRY_INTERVAL 10000 //micro
+
 /* Each drawable can refer to at most 3 images: src, brush and mask */
 #define MAX_DRAWABLE_PIXMAP_CACHE_ITEMS 3
 
@@ -89,6 +93,25 @@ struct _DisplayChannelClient {
      SPICE_CONTAINEROF((dcc)->common.base.channel, DisplayChannel, common.base)
 #define RCC_TO_DCC(rcc) SPICE_CONTAINEROF((rcc), DisplayChannelClient, common.base)
 
+typedef struct SurfaceCreateItem {
+    SpiceMsgSurfaceCreate surface_create;
+    PipeItem pipe_item;
+} SurfaceCreateItem;
+
+typedef struct ImageItem {
+    PipeItem link;
+    int refs;
+    SpicePoint pos;
+    int width;
+    int height;
+    int stride;
+    int top_down;
+    int surface_id;
+    int image_format;
+    uint32_t image_flags;
+    int can_lossy;
+    uint8_t data[0];
+} ImageItem;
 
 DisplayChannelClient*      dcc_new                                   (DisplayChannel *display,
                                                                       RedClient *client,
@@ -101,6 +124,7 @@ DisplayChannelClient*      dcc_new                                   (DisplayCha
                                                                       spice_image_compression_t image_compression,
                                                                       spice_wan_compression_t jpeg_state,
                                                                       spice_wan_compression_t zlib_glz_state);
+void                       dcc_start                                 (DisplayChannelClient *dcc);
 void                       dcc_push_monitors_config                  (DisplayChannelClient *dcc);
 void                       dcc_destroy_surface                       (DisplayChannelClient *dcc,
                                                                       uint32_t surface_id);
@@ -108,5 +132,14 @@ void                       dcc_stream_agent_clip                     (DisplayCha
                                                                       StreamAgent *agent);
 void                       dcc_create_stream                         (DisplayChannelClient *dcc,
                                                                       Stream *stream);
+void                       dcc_create_surface                        (DisplayChannelClient *dcc,
+                                                                      int surface_id);
+void                       dcc_push_surface_image                    (DisplayChannelClient *dcc,
+                                                                      int surface_id);
+ImageItem *                dcc_add_surface_area_image                (DisplayChannelClient *dcc,
+                                                                      int surface_id,
+                                                                      SpiceRect *area,
+                                                                      PipeItem *pos,
+                                                                      int can_lossy);
 
 #endif /* DCC_H_ */
