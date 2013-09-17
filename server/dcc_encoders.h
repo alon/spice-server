@@ -1,6 +1,7 @@
 #ifndef DCC_ENCODERS_H_
 # define DCC_ENCODERS_H_
 
+#include <setjmp.h>
 #include "common/marshaller.h"
 #include "common/quic.h"
 #include "red_channel.h"

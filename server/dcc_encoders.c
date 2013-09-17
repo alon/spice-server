@@ -1,5 +1,4 @@
 #include <glib.h>
-#include <setjmp.h>
 
 #include "dcc_encoders.h"
 #include "display_channel.h"

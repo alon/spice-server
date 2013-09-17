@@ -27,6 +27,8 @@
 #include "red_dispatcher.h"
 #include "red_parse_qxl.h"
 
+#define NUM_SURFACES 10000
+
 typedef struct RedWorker RedWorker;
 
 typedef struct CommonChannelClient {
