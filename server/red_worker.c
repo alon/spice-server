@@ -247,7 +247,7 @@ void attach_stream(DisplayChannel *display, Drawable *drawable, Stream *stream)
         if (!region_is_equal(&clip_in_draw_dest, &drawable->tree_item.base.rgn)) {
             region_remove(&agent->clip, &drawable->red_drawable->bbox);
             region_or(&agent->clip, &drawable->tree_item.base.rgn);
-            dcc_add_stream_agent_clip(dcc, agent);
+            dcc_stream_agent_clip(dcc, agent);
         }
 #ifdef STREAM_STATS
         agent->stats.num_input_frames++;
@@ -884,7 +884,7 @@ static void dcc_detach_stream_gracefully(DisplayChannelClient *dcc,
 
     /* stopping the client from playing older frames at once*/
     region_clear(&agent->clip);
-    dcc_add_stream_agent_clip(dcc, agent);
+    dcc_stream_agent_clip(dcc, agent);
 
     if (region_is_empty(&agent->vis_region)) {
         spice_debug("stream %d: vis region empty", stream_id);

@@ -23,6 +23,7 @@
 #define RED_STREAM_DEFAULT_HIGH_START_BIT_RATE (10 * 1024 * 1024) // 10Mbps
 #define RED_STREAM_DEFAULT_LOW_START_BIT_RATE (2.5 * 1024 * 1024) // 2.5Mbps
 #define MAX_FPS 30
+#define NUM_STREAMS 50
 
 /* move back to display_channel once struct private */
 typedef struct DisplayChannel DisplayChannel;
