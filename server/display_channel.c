@@ -796,3 +796,34 @@ int display_channel_add_drawable(DisplayChannel *display, Drawable *drawable)
 
     return ret;
 }
+
+int display_channel_wait_for_migrate_data(DisplayChannel *display)
+{
+    uint64_t end_time = red_get_monotonic_time() + DISPLAY_CLIENT_MIGRATE_DATA_TIMEOUT;
+    RedChannel *channel = &display->common.base;
+    RedChannelClient *rcc;
+
+    spice_debug(NULL);
+    spice_assert(channel->clients_num == 1);
+
+    rcc = SPICE_CONTAINEROF(ring_get_head(&channel->clients), RedChannelClient, channel_link);
+    spice_assert(red_channel_client_waits_for_migrate_data(rcc));
+
+    for (;;) {
+        red_channel_client_receive(rcc);
+        if (!red_channel_client_is_connected(rcc)) {
+            break;
+        }
+
+        if (!red_channel_client_waits_for_migrate_data(rcc)) {
+            return TRUE;
+        }
+        if (red_get_monotonic_time() > end_time) {
+            spice_warning("timeout");
+            red_channel_client_disconnect(rcc);
+            break;
+        }
+        usleep(DISPLAY_CLIENT_RETRY_INTERVAL);
+    }
+    return FALSE;
+}
