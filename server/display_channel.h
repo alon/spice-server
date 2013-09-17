@@ -97,6 +97,11 @@ struct Drawable {
     uint32_t process_commands_generation;
 };
 
+#define LINK_TO_DPI(ptr) SPICE_CONTAINEROF((ptr), DrawablePipeItem, base)
+#define DRAWABLE_FOREACH_DPI_SAFE(drawable, link, next, dpi)            \
+    SAFE_FOREACH(link, next, drawable,  &(drawable)->pipes, dpi, LINK_TO_DPI(link))
+
+
 struct _DisplayChannelClient {
     CommonChannelClient common;
     spice_image_compression_t image_compression;
@@ -190,6 +195,10 @@ DisplayChannelClient*      dcc_new                                   (DisplayCha
 void                       dcc_push_monitors_config                  (DisplayChannelClient *dcc);
 void                       dcc_push_destroy_surface                  (DisplayChannelClient *dcc,
                                                                       uint32_t surface_id);
+void                       dcc_add_stream_agent_clip                 (DisplayChannelClient* dcc,
+                                                                      StreamAgent *agent);
+void                       dcc_create_stream                         (DisplayChannelClient *dcc,
+                                                                      Stream *stream);
 
 typedef struct DrawablePipeItem {
     RingItem base;  /* link for a list of pipe items held by Drawable */
@@ -294,12 +303,12 @@ struct DisplayChannel {
     RedCompressBuf *free_compress_bufs;
 
 /* TODO: some day unify this, make it more runtime.. */
+    uint32_t add_count;
+    uint32_t add_with_shadow_count;
 #ifdef RED_WORKER_STAT
     stat_info_t add_stat;
     stat_info_t exclude_stat;
     stat_info_t __exclude_stat;
-    uint32_t add_count;
-    uint32_t add_with_shadow_count;
 #endif
 #ifdef RED_STATISTICS
     uint64_t *cache_hits_counter;
@@ -350,9 +359,6 @@ typedef struct UpgradeItem {
 
 void                       display_channel_set_stream_video          (DisplayChannel *display,
                                                                       int stream_video);
-void                       display_channel_attach_stream             (DisplayChannel *display,
-                                                                      Drawable *drawable,
-                                                                      Stream *stream);
 int                        display_channel_get_streams_timout        (DisplayChannel *display);
 void                       display_channel_compress_stats_print      (const DisplayChannel *display);
 void                       display_channel_compress_stats_reset      (DisplayChannel *display);
@@ -367,6 +373,8 @@ void                       display_channel_set_surface_release_info  (DisplayCha
                                                                       QXLReleaseInfo *info,
                                                                       uint32_t group_id);
 void                       display_channel_show_tree                 (DisplayChannel *display);
+int                        display_channel_add_drawable              (DisplayChannel *display,
+                                                                      Drawable *drawable);
 
 static inline int is_equal_path(SpicePath *path1, SpicePath *path2)
 {
@@ -449,6 +457,23 @@ static inline int is_same_drawable(Drawable *d1, Drawable *d2)
     }
 }
 
+static inline int is_drawable_independent_from_surfaces(Drawable *drawable)
+{
+    int x;
+
+    for (x = 0; x < 3; ++x) {
+        if (drawable->surface_deps[x] != -1) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+static inline int has_shadow(RedDrawable *drawable)
+{
+    return drawable->type == QXL_COPY_BITS;
+}
+
 static inline int is_primary_surface(DisplayChannel *display, uint32_t surface_id)
 {
     if (surface_id == 0) {
@@ -456,5 +481,23 @@ static inline int is_primary_surface(DisplayChannel *display, uint32_t surface_i
     }
     return FALSE;
 }
+
+static inline void region_add_clip_rects(QRegion *rgn, SpiceClipRects *data)
+{
+    int i;
+
+    for (i = 0; i < data->num_rects; i++) {
+        region_add(rgn, data->rects + i);
+    }
+}
+
+void red_pipes_add_drawable(DisplayChannel *display, Drawable *drawable);
+void current_remove_drawable(DisplayChannel *display, Drawable *item);
+void red_pipes_add_drawable_after(DisplayChannel *display,
+                                  Drawable *drawable, Drawable *pos_after);
+void red_pipes_remove_drawable(Drawable *drawable);
+void dcc_add_drawable(DisplayChannelClient *dcc, Drawable *drawable);
+void current_remove(DisplayChannel *display, TreeItem *item);
+void detach_streams_behind(DisplayChannel *display, QRegion *region, Drawable *drawable);
 
 #endif /* DISPLAY_CHANNEL_H_ */
