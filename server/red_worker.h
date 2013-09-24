@@ -118,6 +118,8 @@ RedChannel* red_worker_get_display_channel(RedWorker *worker);
 GMainContext* red_worker_get_context(RedWorker *worker);
 void red_worker_print_stats(RedWorker *worker);
 clockid_t red_worker_get_clockid(RedWorker *worker);
+void red_drawable_unref(RedWorker *worker, RedDrawable *red_drawable,
+                        uint32_t group_id);
 
 RedChannel *red_worker_new_channel(RedWorker *worker, int size,
                                    const char *name,
