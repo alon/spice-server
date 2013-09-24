@@ -18,6 +18,8 @@ typedef struct _GlzDrawableInstanceItem GlzDrawableInstanceItem;
 void             dcc_encoders_init                           (DisplayChannelClient *dcc);
 void             dcc_free_glz_drawable_instance              (DisplayChannelClient *dcc,
                                                               GlzDrawableInstanceItem *item);
+void             dcc_free_glz_drawables_to_free              (DisplayChannelClient* dcc);
+
 void             marshaller_add_compressed                   (SpiceMarshaller *m,
                                                               RedCompressBuf *comp_buf,
                                                               size_t size);

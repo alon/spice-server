@@ -2165,23 +2165,6 @@ static void fill_base(SpiceMarshaller *base_marshaller, Drawable *drawable)
     spice_marshall_DisplayBase(base_marshaller, &base);
 }
 
-static void red_display_handle_glz_drawables_to_free(DisplayChannelClient* dcc)
-{
-    RingItem *ring_link;
-
-    if (!dcc->glz_dict) {
-        return;
-    }
-    pthread_mutex_lock(&dcc->glz_drawables_inst_to_free_lock);
-    while ((ring_link = ring_get_head(&dcc->glz_drawables_inst_to_free))) {
-        GlzDrawableInstanceItem *drawable_instance = SPICE_CONTAINEROF(ring_link,
-                                                                 GlzDrawableInstanceItem,
-                                                                 free_link);
-        dcc_free_glz_drawable_instance(dcc, drawable_instance);
-    }
-    pthread_mutex_unlock(&dcc->glz_drawables_inst_to_free_lock);
-}
-
 /*
  * Releases all the instances of the drawable from the dictionary and the display channel client.
  * The release of the last instance will also release the drawable itself and the qxl drawable
@@ -7000,13 +6983,6 @@ static gboolean worker_source_check(GSource *source)
     return worker->running /* TODO && worker->pending_process */;
 }
 
-static void red_display_cc_free_glz_drawables(RedChannelClient *rcc)
-{
-    DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
-
-    red_display_handle_glz_drawables_to_free(dcc);
-}
-
 static void display_channel_streams_timout(DisplayChannel *display)
 {
     Ring *ring = &display->streams;
@@ -7035,8 +7011,7 @@ static gboolean worker_source_dispatch(GSource *source, GSourceFunc callback,
        while the global lz data not since migrate data msg hasn't been
        received yet */
     /* FIXME: why is this here, and not in display_channel_create */
-    red_channel_apply_clients(RED_CHANNEL(display),
-                              red_display_cc_free_glz_drawables);
+    display_channel_free_glz_drawables_to_free(display);
 
     /* FIXME: could use its own source */
     display_channel_streams_timout(display);

@@ -398,3 +398,20 @@ void dcc_free_glz_drawable_instance(DisplayChannelClient *dcc,
         free(glz_drawable);
     }
 }
+
+void dcc_free_glz_drawables_to_free(DisplayChannelClient* dcc)
+{
+    RingItem *ring_link;
+
+    if (!dcc->glz_dict) {
+        return;
+    }
+    pthread_mutex_lock(&dcc->glz_drawables_inst_to_free_lock);
+    while ((ring_link = ring_get_head(&dcc->glz_drawables_inst_to_free))) {
+        GlzDrawableInstanceItem *drawable_instance = SPICE_CONTAINEROF(ring_link,
+                                                                 GlzDrawableInstanceItem,
+                                                                 free_link);
+        dcc_free_glz_drawable_instance(dcc, drawable_instance);
+    }
+    pthread_mutex_unlock(&dcc->glz_drawables_inst_to_free_lock);
+}

@@ -273,6 +273,7 @@ void                       display_channel_current_flush             (DisplayCha
                                                                       int surface_id);
 int                        display_channel_wait_for_migrate_data     (DisplayChannel *display);
 void                       display_channel_flush_all_surfaces        (DisplayChannel *display);
+void                       display_channel_free_glz_drawables_to_free(DisplayChannel *display);
 
 static inline int is_equal_path(SpicePath *path1, SpicePath *path2)
 {
