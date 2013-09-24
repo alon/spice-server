@@ -399,6 +399,39 @@ void dcc_free_glz_drawable_instance(DisplayChannelClient *dcc,
     }
 }
 
+/*
+ * Releases all the instances of the drawable from the dictionary and the display channel client.
+ * The release of the last instance will also release the drawable itself and the qxl drawable
+ * if possible.
+ * NOTE - the caller should prevent encoding using the dictionary during this operation
+ */
+void dcc_free_glz_drawable(DisplayChannelClient *dcc, RedGlzDrawable *drawable)
+{
+    RingItem *head_instance = ring_get_head(&drawable->instances);
+    int cont = (head_instance != NULL);
+
+    while (cont) {
+        if (drawable->instances_count == 1) {
+            /* Last instance: dcc_free_glz_drawable_instance will free the drawable */
+            cont = FALSE;
+        }
+        GlzDrawableInstanceItem *instance = SPICE_CONTAINEROF(head_instance,
+                                                        GlzDrawableInstanceItem,
+                                                        glz_link);
+        if (!ring_item_is_linked(&instance->free_link)) {
+            // the instance didn't get out from window yet
+            glz_enc_dictionary_remove_image(dcc->glz_dict->dict,
+                                            instance->context,
+                                            &dcc->glz_data.usr);
+        }
+        dcc_free_glz_drawable_instance(dcc, instance);
+
+        if (cont) {
+            head_instance = ring_get_head(&drawable->instances);
+        }
+    }
+}
+
 void dcc_free_glz_drawables_to_free(DisplayChannelClient* dcc)
 {
     RingItem *ring_link;
@@ -414,4 +447,26 @@ void dcc_free_glz_drawables_to_free(DisplayChannelClient* dcc)
         dcc_free_glz_drawable_instance(dcc, drawable_instance);
     }
     pthread_mutex_unlock(&dcc->glz_drawables_inst_to_free_lock);
+}
+
+/* Clear all lz drawables - enforce their removal from the global dictionary.
+   NOTE - prevents encoding using the dictionary during the operation*/
+void dcc_free_glz_drawables(DisplayChannelClient *dcc)
+{
+    RingItem *ring_link;
+    GlzSharedDictionary *glz_dict = dcc ? dcc->glz_dict : NULL;
+
+    if (!glz_dict) {
+        return;
+    }
+
+    // assure no display channel is during global lz encoding
+    pthread_rwlock_wrlock(&glz_dict->encode_lock);
+    while ((ring_link = ring_get_head(&dcc->glz_drawables))) {
+        RedGlzDrawable *drawable = SPICE_CONTAINEROF(ring_link, RedGlzDrawable, link);
+        // no need to lock the to_free list, since we assured no other thread is encoding and
+        // thus not other thread access the to_free list of the channel
+        dcc_free_glz_drawable(dcc, drawable);
+    }
+    pthread_rwlock_unlock(&glz_dict->encode_lock);
 }
