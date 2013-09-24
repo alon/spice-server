@@ -6441,28 +6441,12 @@ static void handle_dev_destroy_primary_surface_async(void *opaque, uint32_t mess
     destroy_primary_surface(worker, surface_id);
 }
 
-static void flush_all_surfaces(DisplayChannel *display)
-{
-    int x;
-
-    for (x = 0; x < NUM_SURFACES; ++x) {
-        if (display->surfaces[x].context.canvas) {
-            display_channel_current_flush(display, x);
-        }
-    }
-}
-
-static void dev_flush_surfaces(RedWorker *worker)
-{
-    flush_all_qxl_commands(worker);
-    flush_all_surfaces(worker->display_channel);
-}
-
 static void handle_dev_flush_surfaces_async(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
 
-    dev_flush_surfaces(worker);
+    flush_all_qxl_commands(worker);
+    display_channel_flush_all_surfaces(worker->display_channel);
 }
 
 static void handle_dev_stop(void *opaque, uint32_t message_type, void *payload)
@@ -6473,7 +6457,7 @@ static void handle_dev_stop(void *opaque, uint32_t message_type, void *payload)
     spice_assert(worker->running);
     worker->running = FALSE;
     red_display_clear_glz_drawables(worker->display_channel);
-    flush_all_surfaces(worker->display_channel);
+    display_channel_flush_all_surfaces(worker->display_channel);
     /* todo: when the waiting is expected to take long (slow connection and
      * overloaded pipe), don't wait, and in case of migration,
      * purge the pipe, send destroy_all_surfaces
