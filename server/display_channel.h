@@ -272,6 +272,7 @@ int                        display_channel_add_drawable              (DisplayCha
 void                       display_channel_current_flush             (DisplayChannel *display,
                                                                       int surface_id);
 int                        display_channel_wait_for_migrate_data     (DisplayChannel *display);
+void                       display_channel_flush_all_surfaces        (DisplayChannel *display);
 
 static inline int is_equal_path(SpicePath *path1, SpicePath *path2)
 {
