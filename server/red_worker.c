@@ -165,7 +165,7 @@ static void red_update_area(DisplayChannel *display, const SpiceRect *area, int 
 static void red_update_area_till(DisplayChannel *display, const SpiceRect *area, int surface_id,
                                  Drawable *last);
 static inline void display_begin_send_message(RedChannelClient *rcc);
-static void red_release_glz(DisplayChannelClient *dcc);
+static void dcc_release_glz(DisplayChannelClient *dcc);
 static void red_freeze_glz(DisplayChannelClient *dcc);
 static void display_channel_push_release(DisplayChannelClient *dcc, uint8_t type, uint64_t id,
                                          uint64_t* sync_data);
@@ -2200,7 +2200,7 @@ static void dcc_free_glz_drawable(DisplayChannelClient *dcc, RedGlzDrawable *dra
 
 /* Clear all lz drawables - enforce their removal from the global dictionary.
    NOTE - prevents encoding using the dictionary during the operation*/
-static void red_display_client_clear_glz_drawables(DisplayChannelClient *dcc)
+static void dcc_free_glz_drawables(DisplayChannelClient *dcc)
 {
     RingItem *ring_link;
     GlzSharedDictionary *glz_dict = dcc ? dcc->glz_dict : NULL;
@@ -2220,7 +2220,7 @@ static void red_display_client_clear_glz_drawables(DisplayChannelClient *dcc)
     pthread_rwlock_unlock(&glz_dict->encode_lock);
 }
 
-static void red_display_clear_glz_drawables(DisplayChannel *display_channel)
+static void display_channel_free_glz_drawables(DisplayChannel *display_channel)
 {
     RingItem *link, *next;
     DisplayChannelClient *dcc;
@@ -2229,7 +2229,7 @@ static void red_display_clear_glz_drawables(DisplayChannel *display_channel)
         return;
     }
     DCC_FOREACH_SAFE(link, next, dcc, RED_CHANNEL(display_channel)) {
-        red_display_client_clear_glz_drawables(dcc);
+        dcc_free_glz_drawables(dcc);
     }
 }
 
@@ -4826,7 +4826,7 @@ static void display_channel_client_on_disconnect(RedChannelClient *rcc)
     display_channel_compress_stats_print(display);
     pixmap_cache_unref(dcc->pixmap_cache);
     dcc->pixmap_cache = NULL;
-    red_release_glz(dcc);
+    dcc_release_glz(dcc);
     dcc_palette_cache_reset(dcc);
     free(dcc->send_data.stream_outbuf);
     free(dcc->send_data.free_list.res);
@@ -5260,11 +5260,11 @@ static void red_freeze_glz(DisplayChannelClient *dcc)
 }
 
 /* destroy encoder, and dictionary if no one uses it*/
-static void red_release_glz(DisplayChannelClient *dcc)
+static void dcc_release_glz(DisplayChannelClient *dcc)
 {
     GlzSharedDictionary *shared_dict;
 
-    red_display_client_clear_glz_drawables(dcc);
+    dcc_free_glz_drawables(dcc);
 
     glz_encoder_destroy(dcc->glz);
     dcc->glz = NULL;
@@ -6237,7 +6237,7 @@ void display_channel_destroy_surfaces(DisplayChannel *display)
         red_pipes_add_verb(RED_CHANNEL(display), SPICE_MSG_DISPLAY_STREAM_DESTROY_ALL);
     }
 
-    red_display_clear_glz_drawables(display);
+    display_channel_free_glz_drawables(display);
 }
 
 static void handle_dev_destroy_surfaces(void *opaque, uint32_t message_type, void *payload)
@@ -6391,10 +6391,13 @@ static void handle_dev_stop(void *opaque, uint32_t message_type, void *payload)
     RedWorker *worker = opaque;
 
     spice_info("stop");
-    spice_assert(worker->running);
+    spice_return_if_fail(worker->running);
+
     worker->running = FALSE;
-    red_display_clear_glz_drawables(worker->display_channel);
+
+    display_channel_free_glz_drawables(worker->display_channel);
     display_channel_flush_all_surfaces(worker->display_channel);
+
     /* todo: when the waiting is expected to take long (slow connection and
      * overloaded pipe), don't wait, and in case of migration,
      * purge the pipe, send destroy_all_surfaces
