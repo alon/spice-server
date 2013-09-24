@@ -166,8 +166,6 @@ static void red_update_area_till(DisplayChannel *display, const SpiceRect *area,
                                  Drawable *last);
 static inline void display_begin_send_message(RedChannelClient *rcc);
 static void dcc_release_glz(DisplayChannelClient *dcc);
-static void display_channel_push_release(DisplayChannelClient *dcc, uint8_t type, uint64_t id,
-                                         uint64_t* sync_data);
 static int red_display_free_some_independent_glz_drawables(DisplayChannelClient *dcc);
 static void display_channel_client_release_item_before_push(DisplayChannelClient *dcc,
                                                             PipeItem *item);
@@ -2188,75 +2186,6 @@ static int red_display_free_some_independent_glz_drawables(DisplayChannelClient 
     return n;
 }
 
-int dcc_pixmap_cache_add(DisplayChannelClient *dcc, uint64_t id, uint32_t size, int lossy)
-{
-    PixmapCache *cache = dcc->pixmap_cache;
-    NewCacheItem *item;
-    uint64_t serial;
-    int key;
-
-    spice_assert(size > 0);
-
-    item = spice_new(NewCacheItem, 1);
-    serial = red_channel_client_get_message_serial(RED_CHANNEL_CLIENT(dcc));
-
-    pthread_mutex_lock(&cache->lock);
-
-    if (cache->generation != dcc->pixmap_cache_generation) {
-        if (!dcc->pending_pixmaps_sync) {
-            red_channel_client_pipe_add_type(
-                                             RED_CHANNEL_CLIENT(dcc), PIPE_ITEM_TYPE_PIXMAP_SYNC);
-            dcc->pending_pixmaps_sync = TRUE;
-        }
-        pthread_mutex_unlock(&cache->lock);
-        free(item);
-        return FALSE;
-    }
-
-    cache->available -= size;
-    while (cache->available < 0) {
-        NewCacheItem *tail;
-        NewCacheItem **now;
-
-        if (!(tail = (NewCacheItem *)ring_get_tail(&cache->lru)) ||
-                                                   tail->sync[dcc->common.id] == serial) {
-            cache->available += size;
-            pthread_mutex_unlock(&cache->lock);
-            free(item);
-            return FALSE;
-        }
-
-        now = &cache->hash_table[BITS_CACHE_HASH_KEY(tail->id)];
-        for (;;) {
-            spice_assert(*now);
-            if (*now == tail) {
-                *now = tail->next;
-                break;
-            }
-            now = &(*now)->next;
-        }
-        ring_remove(&tail->lru_link);
-        cache->items--;
-        cache->available += tail->size;
-        cache->sync[dcc->common.id] = serial;
-        display_channel_push_release(dcc, SPICE_RES_TYPE_PIXMAP, tail->id, tail->sync);
-        free(tail);
-    }
-    ++cache->items;
-    item->next = cache->hash_table[(key = BITS_CACHE_HASH_KEY(id))];
-    cache->hash_table[key] = item;
-    ring_item_init(&item->lru_link);
-    ring_add(&cache->lru, &item->lru_link);
-    item->id = id;
-    item->size = size;
-    item->lossy = lossy;
-    memset(item->sync, 0, sizeof(item->sync));
-    item->sync[dcc->common.id] = serial;
-    cache->sync[dcc->common.id] = serial;
-    pthread_mutex_unlock(&cache->lock);
-    return TRUE;
-}
-
 static inline void red_display_add_image_to_pixmap_cache(RedChannelClient *rcc,
                                                          SpiceImage *image, SpiceImage *io_image,
                                                          int is_lossy)
@@ -3844,31 +3773,6 @@ static inline void red_marshall_qxl_drawable(RedChannelClient *rcc,
     default:
         spice_error("invalid type");
     }
-}
-
-static void display_channel_push_release(DisplayChannelClient *dcc, uint8_t type, uint64_t id,
-                                         uint64_t* sync_data)
-{
-    FreeList *free_list = &dcc->send_data.free_list;
-    int i;
-
-    for (i = 0; i < MAX_CACHE_CLIENTS; i++) {
-        free_list->sync[i] = MAX(free_list->sync[i], sync_data[i]);
-    }
-
-    if (free_list->res->count == free_list->res_size) {
-        SpiceResourceList *new_list;
-        new_list = spice_malloc(sizeof(*new_list) +
-                                free_list->res_size * sizeof(SpiceResourceID) * 2);
-        new_list->count = free_list->res->count;
-        memcpy(new_list->resources, free_list->res->resources,
-               new_list->count * sizeof(SpiceResourceID));
-        free(free_list->res);
-        free_list->res = new_list;
-        free_list->res_size *= 2;
-    }
-    free_list->res->resources[free_list->res->count].type = type;
-    free_list->res->resources[free_list->res->count++].id = id;
 }
 
 static inline void display_marshal_sub_msg_inval_list(SpiceMarshaller *m,

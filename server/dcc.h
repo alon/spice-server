@@ -147,6 +147,8 @@ void                       dcc_palette_cache_reset                   (DisplayCha
 void                       dcc_palette_cache_palette                 (DisplayChannelClient *dcc,
                                                                       SpicePalette *palette,
                                                                       uint8_t *flags);
+int                        dcc_pixmap_cache_add                      (DisplayChannelClient *dcc,
+                                                                      uint64_t id, uint32_t size, int lossy);
 
 typedef struct compress_send_data_t {
     void*    comp_buf;
