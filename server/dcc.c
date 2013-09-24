@@ -316,8 +316,8 @@ static GlzDrawableInstanceItem *add_glz_drawable_instance(RedGlzDrawable *glz_dr
     ring_item_init(&ret->free_link);
     ring_item_init(&ret->glz_link);
     ring_add(&glz_drawable->instances, &ret->glz_link);
-    ret->glz_instance = NULL;
-    ret->red_glz_drawable = glz_drawable;
+    ret->context = NULL;
+    ret->glz_drawable = glz_drawable;
 
     return ret;
 }
@@ -359,7 +359,7 @@ int dcc_compress_image_glz(DisplayChannelClient *dcc,
                           src->stride, glz_data->data.bufs_head->buf,
                           sizeof(glz_data->data.bufs_head->buf),
                           glz_drawable_instance,
-                          &glz_drawable_instance->glz_instance);
+                          &glz_drawable_instance->context);
 
     stat_compress_add(&display_channel->glz_stat, start_time, src->stride * src->y, glz_size);
 

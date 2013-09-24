@@ -276,7 +276,7 @@ static void glz_usr_free_image(GlzEncoderUsrContext *usr, GlzUsrImageContext *im
 {
     GlzData *lz_data = (GlzData *)usr;
     GlzDrawableInstanceItem *glz_drawable_instance = (GlzDrawableInstanceItem *)image;
-    DisplayChannelClient *drawable_cc = glz_drawable_instance->red_glz_drawable->dcc;
+    DisplayChannelClient *drawable_cc = glz_drawable_instance->glz_drawable->dcc;
     DisplayChannelClient *this_cc = SPICE_CONTAINEROF(lz_data, DisplayChannelClient, glz_data);
     if (this_cc == drawable_cc) {
         dcc_free_glz_drawable_instance(drawable_cc, glz_drawable_instance);

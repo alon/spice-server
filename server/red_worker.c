@@ -2178,9 +2178,9 @@ void dcc_free_glz_drawable_instance(DisplayChannelClient *dcc,
     RedGlzDrawable *glz_drawable;
 
     spice_assert(glz_drawable_instance);
-    spice_assert(glz_drawable_instance->red_glz_drawable);
+    spice_assert(glz_drawable_instance->glz_drawable);
 
-    glz_drawable = glz_drawable_instance->red_glz_drawable;
+    glz_drawable = glz_drawable_instance->glz_drawable;
 
     spice_assert(glz_drawable->dcc == dcc);
     spice_assert(glz_drawable->instances_count);
@@ -2250,7 +2250,7 @@ static void dcc_free_glz_drawable(DisplayChannelClient *dcc, RedGlzDrawable *dra
         if (!ring_item_is_linked(&instance->free_link)) {
             // the instance didn't get out from window yet
             glz_enc_dictionary_remove_image(dcc->glz_dict->dict,
-                                            instance->glz_instance,
+                                            instance->context,
                                             &dcc->glz_data.usr);
         }
         dcc_free_glz_drawable_instance(dcc, instance);
