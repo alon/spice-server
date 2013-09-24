@@ -166,7 +166,6 @@ static void red_update_area_till(DisplayChannel *display, const SpiceRect *area,
                                  Drawable *last);
 static inline void display_begin_send_message(RedChannelClient *rcc);
 static void dcc_release_glz(DisplayChannelClient *dcc);
-static void red_freeze_glz(DisplayChannelClient *dcc);
 static void display_channel_push_release(DisplayChannelClient *dcc, uint8_t type, uint64_t id,
                                          uint64_t* sync_data);
 static int red_display_free_some_independent_glz_drawables(DisplayChannelClient *dcc);
@@ -4269,7 +4268,7 @@ static void display_channel_marshall_migrate_data(RedChannelClient *rcc,
            sizeof(display_data.pixmap_cache_clients));
 
     spice_assert(dcc->glz_dict);
-    red_freeze_glz(dcc);
+    dcc_freeze_glz(dcc);
     display_data.glz_dict_id = dcc->glz_dict->id;
     glz_enc_dictionary_get_restore_data(dcc->glz_dict->dict,
                                         &display_data.glz_dict_data,
@@ -5179,15 +5178,6 @@ static GlzSharedDictionary *red_restore_glz_dictionary(DisplayChannelClient *dcc
     }
     pthread_mutex_unlock(&glz_dictionary_list_lock);
     return shared_dict;
-}
-
-static void red_freeze_glz(DisplayChannelClient *dcc)
-{
-    pthread_rwlock_wrlock(&dcc->glz_dict->encode_lock);
-    if (!dcc->glz_dict->migrate_freeze) {
-        dcc->glz_dict->migrate_freeze = TRUE;
-    }
-    pthread_rwlock_unlock(&dcc->glz_dict->encode_lock);
 }
 
 /* destroy encoder, and dictionary if no one uses it*/
