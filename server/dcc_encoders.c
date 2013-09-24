@@ -351,3 +351,50 @@ void marshaller_add_compressed(SpiceMarshaller *m,
         comp_buf = comp_buf->send_next;
     } while (max);
 }
+
+/* Remove from the to_free list and the instances_list.
+   When no instance is left - the RedGlzDrawable is released too. (and the qxl drawable too, if
+   it is not used by Drawable).
+   NOTE - 1) can be called only by the display channel that created the drawable
+          2) it is assumed that the instance was already removed from the dictionary*/
+void dcc_free_glz_drawable_instance(DisplayChannelClient *dcc,
+                                    GlzDrawableInstanceItem *instance)
+{
+    DisplayChannel *display_channel = DCC_TO_DC(dcc);
+    RedWorker *worker = display_channel->common.worker;
+    RedGlzDrawable *glz_drawable;
+
+    spice_return_if_fail(instance);
+    spice_return_if_fail(instance->glz_drawable);
+
+    glz_drawable = instance->glz_drawable;
+
+    spice_return_if_fail(glz_drawable->dcc == dcc);
+    spice_return_if_fail(glz_drawable->instances_count > 0);
+
+    ring_remove(&instance->glz_link);
+    glz_drawable->instances_count--;
+
+    // when the remove callback is performed from the channel that the
+    // drawable belongs to, the instance is not added to the 'to_free' list
+    if (ring_item_is_linked(&instance->free_link)) {
+        ring_remove(&instance->free_link);
+    }
+
+    if (ring_is_empty(&glz_drawable->instances)) {
+        spice_return_if_fail(glz_drawable->instances_count == 0);
+
+        Drawable *drawable = glz_drawable->drawable;
+
+        if (drawable) {
+            ring_remove(&glz_drawable->drawable_link);
+        }
+        red_drawable_unref(worker, glz_drawable->red_drawable,
+                           glz_drawable->group_id);
+        dcc->glz_drawable_count--;
+        if (ring_item_is_linked(&glz_drawable->link)) {
+            ring_remove(&glz_drawable->link);
+        }
+        free(glz_drawable);
+    }
+}
