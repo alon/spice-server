@@ -838,3 +838,15 @@ void display_channel_flush_all_surfaces(DisplayChannel *display)
         }
     }
 }
+
+static void rcc_free_glz_drawables_to_free(RedChannelClient *rcc)
+{
+    DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
+
+    dcc_free_glz_drawables_to_free(dcc);
+}
+
+void display_channel_free_glz_drawables_to_free(DisplayChannel *display)
+{
+    red_channel_apply_clients(RED_CHANNEL(display), rcc_free_glz_drawables_to_free);
+}
