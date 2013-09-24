@@ -308,7 +308,8 @@ static RedGlzDrawable *get_glz_drawable(DisplayChannelClient *dcc, Drawable *dra
    NOTE - the caller should set the glz_instance returned by the encoder by itself.*/
 static GlzDrawableInstanceItem *add_glz_drawable_instance(RedGlzDrawable *glz_drawable)
 {
-    spice_assert(glz_drawable->instances_count < MAX_GLZ_DRAWABLE_INSTANCES);
+    spice_return_val_if_fail(glz_drawable->instances_count < MAX_GLZ_DRAWABLE_INSTANCES, NULL);
+
     // NOTE: We assume the additions are performed consecutively, without removals in the middle
     GlzDrawableInstanceItem *ret = glz_drawable->instances_pool + glz_drawable->instances_count;
     glz_drawable->instances_count++;
@@ -328,11 +329,12 @@ int dcc_compress_image_glz(DisplayChannelClient *dcc,
                            SpiceImage *dest, SpiceBitmap *src, Drawable *drawable,
                            compress_send_data_t* o_comp_data)
 {
+    spice_return_val_if_fail(bitmap_fmt_is_rgb(src->format), FALSE);
+
     DisplayChannel *display_channel = DCC_TO_DC(dcc);
 #ifdef COMPRESS_STAT
     stat_time_t start_time = stat_now(worker);
 #endif
-    spice_assert(bitmap_fmt_is_rgb(src->format));
     GlzData *glz_data = &dcc->glz_data;
     ZlibData *zlib_data;
     LzImageType type = MAP_BITMAP_FMT_TO_LZ_IMAGE_TYPE[src->format];
@@ -463,7 +465,7 @@ int dcc_compress_image_lz(DisplayChannelClient *dcc,
     } else {
         /* masks are 1BIT bitmaps without palettes, but they are not compressed
          * (see fill_mask) */
-        spice_assert(src->palette);
+        spice_return_val_if_fail(src->palette, FALSE);
         dest->descriptor.type = SPICE_IMAGE_TYPE_LZ_PLT;
         dest->u.lz_plt.data_size = size;
         dest->u.lz_plt.flags = src->flags & SPICE_BITMAP_FLAGS_TOP_DOWN;
@@ -864,7 +866,7 @@ int dcc_pixmap_cache_add(DisplayChannelClient *dcc, uint64_t id, uint32_t size, 
     uint64_t serial;
     int key;
 
-    spice_assert(size > 0);
+    spice_return_val_if_fail(size > 0, FALSE);
 
     item = spice_new(NewCacheItem, 1);
     serial = red_channel_client_get_message_serial(RED_CHANNEL_CLIENT(dcc));
@@ -897,7 +899,7 @@ int dcc_pixmap_cache_add(DisplayChannelClient *dcc, uint64_t id, uint32_t size, 
 
         now = &cache->hash_table[BITS_CACHE_HASH_KEY(tail->id)];
         for (;;) {
-            spice_assert(*now);
+            spice_return_val_if_fail(*now, FALSE);
             if (*now == tail) {
                 *now = tail->next;
                 break;
