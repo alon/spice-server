@@ -137,7 +137,6 @@ void                  stream_maintenance                            (DisplayChan
                                                                      Drawable *candidate,
                                                                      Drawable *prev);
 
-void attach_stream(DisplayChannel *display, Drawable *drawable, Stream *stream);
 void detach_stream(DisplayChannel *display, Stream *stream, int detach_sized);
 
 #endif /* STREAM_H */
