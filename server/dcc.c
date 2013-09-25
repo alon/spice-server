@@ -61,6 +61,88 @@ void dcc_push_surface_image(DisplayChannelClient *dcc, int surface_id)
     red_channel_client_push(RED_CHANNEL_CLIENT(dcc));
 }
 
+static void add_drawable_surface_images(DisplayChannelClient *dcc, Drawable *drawable)
+{
+    DisplayChannel *display = DCC_TO_DC(dcc);
+    int x;
+
+    for (x = 0; x < 3; ++x) {
+        int surface_id;
+
+        surface_id = drawable->surface_deps[x];
+        if (surface_id != -1) {
+            if (dcc->surface_client_created[surface_id] == TRUE) {
+                continue;
+            }
+            dcc_create_surface(dcc, surface_id);
+            display_channel_current_flush(display, surface_id);
+            dcc_push_surface_image(dcc, surface_id);
+        }
+    }
+
+    if (dcc->surface_client_created[drawable->surface_id] == TRUE) {
+        return;
+    }
+
+    dcc_create_surface(dcc, drawable->surface_id);
+    display_channel_current_flush(display, drawable->surface_id);
+    dcc_push_surface_image(dcc, drawable->surface_id);
+}
+
+DrawablePipeItem *drawable_pipe_item_ref(DrawablePipeItem *dpi)
+{
+    dpi->refs++;
+    return dpi;
+}
+
+void drawable_pipe_item_unref(DrawablePipeItem *dpi)
+{
+    DisplayChannel *display = DCC_TO_DC(dpi->dcc);
+
+    if (--dpi->refs)
+        return;
+
+    spice_return_if_fail(!ring_item_is_linked(&dpi->dpi_pipe_item.link));
+    spice_return_if_fail(!ring_item_is_linked(&dpi->base));
+    display_channel_drawable_unref(display, dpi->drawable);
+    free(dpi);
+}
+
+static DrawablePipeItem *drawable_pipe_item_new(DisplayChannelClient *dcc, Drawable *drawable)
+{
+    DrawablePipeItem *dpi;
+
+    dpi = spice_malloc0(sizeof(*dpi));
+    dpi->drawable = drawable;
+    dpi->dcc = dcc;
+    ring_item_init(&dpi->base);
+    ring_add(&drawable->pipes, &dpi->base);
+    red_channel_pipe_item_init(RED_CHANNEL_CLIENT(dcc)->channel,
+                               &dpi->dpi_pipe_item, PIPE_ITEM_TYPE_DRAW);
+    dpi->refs++;
+    drawable->refs++;
+    return dpi;
+}
+
+void dcc_add_drawable(DisplayChannelClient *dcc, Drawable *drawable, bool to_tail)
+{
+    DrawablePipeItem *dpi = drawable_pipe_item_new(dcc, drawable);
+
+    add_drawable_surface_images(dcc, drawable);
+    if (to_tail)
+        red_channel_client_pipe_add_tail(RED_CHANNEL_CLIENT(dcc), &dpi->dpi_pipe_item);
+    else
+        red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &dpi->dpi_pipe_item);
+}
+
+void dcc_add_drawable_after(DisplayChannelClient *dcc, Drawable *drawable, PipeItem *pos)
+{
+    DrawablePipeItem *dpi = drawable_pipe_item_new(dcc, drawable);
+
+    add_drawable_surface_images(dcc, drawable);
+    red_channel_client_pipe_add_after(RED_CHANNEL_CLIENT(dcc), &dpi->dpi_pipe_item, pos);
+}
+
 static void dcc_init_stream_agents(DisplayChannelClient *dcc)
 {
     int i;

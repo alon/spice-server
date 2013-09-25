@@ -115,6 +115,17 @@ typedef struct ImageItem {
     uint8_t data[0];
 } ImageItem;
 
+typedef struct DrawablePipeItem {
+    RingItem base;  /* link for a list of pipe items held by Drawable */
+    PipeItem dpi_pipe_item; /* link for the client's pipe itself */
+    Drawable *drawable;
+    DisplayChannelClient *dcc;
+    uint8_t refs;
+} DrawablePipeItem;
+
+void                       drawable_pipe_item_unref                  (DrawablePipeItem *dpi);
+DrawablePipeItem*          drawable_pipe_item_ref                    (DrawablePipeItem *dpi);
+
 DisplayChannelClient*      dcc_new                                   (DisplayChannel *display,
                                                                       RedClient *client,
                                                                       RedsStream *stream,
@@ -149,6 +160,12 @@ void                       dcc_palette_cache_palette                 (DisplayCha
                                                                       uint8_t *flags);
 int                        dcc_pixmap_cache_add                      (DisplayChannelClient *dcc,
                                                                       uint64_t id, uint32_t size, int lossy);
+void                       dcc_add_drawable                          (DisplayChannelClient *dcc,
+                                                                      Drawable *drawable,
+                                                                      bool to_tail);
+void                       dcc_add_drawable_after                    (DisplayChannelClient *dcc,
+                                                                      Drawable *drawable,
+                                                                      PipeItem *pos);
 
 typedef struct compress_send_data_t {
     void*    comp_buf;
