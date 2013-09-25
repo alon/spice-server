@@ -129,6 +129,18 @@ StreamClipItem *stream_clip_item_new(DisplayChannelClient* dcc, StreamAgent *age
     return item;
 }
 
+void stream_clip_item_unref(DisplayChannelClient *dcc, StreamClipItem *item)
+{
+    DisplayChannel *display = DCC_TO_DC(dcc);
+
+    if (--item->refs)
+        return;
+
+    stream_agent_unref(display, item->stream_agent);
+    free(item->rects);
+    free(item);
+}
+
 static int is_stream_start(Drawable *drawable)
 {
     return ((drawable->frames_count >= RED_STREAM_FRAMES_START_CONDITION) &&
