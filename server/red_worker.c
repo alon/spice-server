@@ -175,16 +175,6 @@ static void red_create_surface(DisplayChannel *display, uint32_t surface_id, uin
                                uint32_t height, int32_t stride, uint32_t format,
                                void *line_0, int data_is_valid, int send_client);
 
-static void display_stream_clip_unref(DisplayChannel *display, StreamClipItem *item)
-{
-    if (--item->refs)
-        return;
-
-    stream_agent_unref(display, item->stream_agent);
-    free(item->rects);
-    free(item);
-}
-
 void attach_stream(DisplayChannel *display, Drawable *drawable, Stream *stream)
 {
     DisplayChannelClient *dcc;
@@ -5654,7 +5644,7 @@ static void display_channel_client_release_item_after_push(DisplayChannelClient 
         drawable_pipe_item_unref(SPICE_CONTAINEROF(item, DrawablePipeItem, dpi_pipe_item));
         break;
     case PIPE_ITEM_TYPE_STREAM_CLIP:
-        display_stream_clip_unref(display, (StreamClipItem *)item);
+        stream_clip_item_unref(dcc, (StreamClipItem *)item);
         break;
     case PIPE_ITEM_TYPE_UPGRADE:
         upgrade_item_unref(display, (UpgradeItem *)item);
@@ -5697,7 +5687,7 @@ static void display_channel_client_release_item_before_push(DisplayChannelClient
         break;
     }
     case PIPE_ITEM_TYPE_STREAM_CLIP:
-        display_stream_clip_unref(display, (StreamClipItem *)item);
+        stream_clip_item_unref(dcc, (StreamClipItem *)item);
         break;
     case PIPE_ITEM_TYPE_STREAM_DESTROY: {
         StreamAgent *agent = SPICE_CONTAINEROF(item, StreamAgent, destroy_item);
