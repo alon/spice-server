@@ -34,9 +34,6 @@
 #include "spice.h"
 #include "red_worker.h"
 #include "reds_sw_canvas.h"
-#ifdef USE_OPENGL
-#include "reds_gl_canvas.h"
-#endif // USE_OPENGL
 #include "reds.h"
 #include "dispatcher.h"
 #include "red_parse_qxl.h"
@@ -1025,9 +1022,6 @@ RedDispatcher *red_dispatcher_new(QXLInstance *qxl)
     if (g_once_init_enter(&initialized)) {
         quic_init();
         sw_canvas_init();
-#ifdef USE_OPENGL
-        gl_canvas_init();
-#endif // USE_OPENGL
         g_once_init_leave(&initialized, TRUE);
     }
 

@@ -8,10 +8,6 @@
 #include "reds_stream.h"
 #include "cache_item.h"
 #include "pixmap_cache.h"
-#ifdef USE_OPENGL
-#include "common/ogl_ctx.h"
-#include "reds_gl_canvas.h"
-#endif /* USE_OPENGL */
 #include "reds_sw_canvas.h"
 #include "stat.h"
 #include "reds.h"

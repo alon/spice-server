@@ -3281,10 +3281,6 @@ typedef struct RendererInfo {
 
 static RendererInfo renderers_info[] = {
     {RED_RENDERER_SW, "sw"},
-#ifdef USE_OPENGL
-    {RED_RENDERER_OGL_PBUF, "oglpbuf"},
-    {RED_RENDERER_OGL_PIXMAP, "oglpixmap"},
-#endif
     {RED_RENDERER_INVALID, NULL},
 };
 
