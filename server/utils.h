@@ -15,4 +15,7 @@ static inline red_time_t red_get_monotonic_time(void)
     return time.tv_sec * (1000 * 1000 * 1000) + time.tv_nsec;
 }
 
+int rgb32_data_has_alpha(int width, int height, size_t stride,
+                         uint8_t *data, int *all_set_out);
+
 #endif /* UTILS_H_ */

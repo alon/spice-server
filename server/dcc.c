@@ -41,6 +41,68 @@ void dcc_create_surface(DisplayChannelClient *dcc, int surface_id)
     red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &create->pipe_item);
 }
 
+// adding the pipe item after pos. If pos == NULL, adding to head.
+ImageItem *dcc_add_surface_area_image(DisplayChannelClient *dcc, int surface_id,
+                                      SpiceRect *area, PipeItem *pos, int can_lossy)
+{
+    DisplayChannel *display = DCC_TO_DC(dcc);
+    RedChannel *channel = RED_CHANNEL(display);
+    RedSurface *surface = &display->surfaces[surface_id];
+    SpiceCanvas *canvas = surface->context.canvas;
+    ImageItem *item;
+    int stride;
+    int width;
+    int height;
+    int bpp;
+    int all_set;
+
+    spice_return_val_if_fail(area, NULL);
+
+    width = area->right - area->left;
+    height = area->bottom - area->top;
+    bpp = SPICE_SURFACE_FMT_DEPTH(surface->context.format) / 8;
+    stride = width * bpp;
+
+    item = (ImageItem *)spice_malloc_n_m(height, stride, sizeof(ImageItem));
+
+    red_channel_pipe_item_init(channel, &item->link, PIPE_ITEM_TYPE_IMAGE);
+
+    item->refs = 1;
+    item->surface_id = surface_id;
+    item->image_format =
+        spice_bitmap_from_surface_type(surface->context.format);
+    item->image_flags = 0;
+    item->pos.x = area->left;
+    item->pos.y = area->top;
+    item->width = width;
+    item->height = height;
+    item->stride = stride;
+    item->top_down = surface->context.top_down;
+    item->can_lossy = can_lossy;
+
+    canvas->ops->read_bits(canvas, item->data, stride, area);
+
+    /* For 32bit non-primary surfaces we need to keep any non-zero
+       high bytes as the surface may be used as source to an alpha_blend */
+    if (!is_primary_surface(display, surface_id) &&
+        item->image_format == SPICE_BITMAP_FMT_32BIT &&
+        rgb32_data_has_alpha(item->width, item->height, item->stride, item->data, &all_set)) {
+        if (all_set) {
+            item->image_flags |= SPICE_IMAGE_FLAGS_HIGH_BITS_SET;
+        } else {
+            item->image_format = SPICE_BITMAP_FMT_RGBA;
+        }
+    }
+
+    if (pos) {
+        red_channel_client_pipe_add_after(RED_CHANNEL_CLIENT(dcc), &item->link, pos);
+    } else {
+        red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &item->link);
+    }
+
+    return item;
+}
+
 void dcc_push_surface_image(DisplayChannelClient *dcc, int surface_id)
 {
     DisplayChannel *display = DCC_TO_DC(dcc);
