@@ -216,12 +216,8 @@ static int cursor_is_connected(RedWorker *worker)
         red_channel_is_connected(RED_CHANNEL(worker->cursor_channel));
 }
 
-static inline PipeItem *red_pipe_get_tail(DisplayChannelClient *dcc)
+static PipeItem *dcc_get_tail(DisplayChannelClient *dcc)
 {
-    if (!dcc) {
-        return NULL;
-    }
-
     return (PipeItem*)ring_get_tail(&RED_CHANNEL_CLIENT(dcc)->pipe);
 }
 
@@ -237,25 +233,6 @@ void red_pipes_remove_drawable(Drawable *drawable)
                                                        &dpi->dpi_pipe_item);
         }
     }
-}
-
-static inline void red_pipe_add_image_item(DisplayChannelClient *dcc, ImageItem *item)
-{
-    if (!dcc) {
-        return;
-    }
-    item->refs++;
-    red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &item->link);
-}
-
-static inline void red_pipe_add_image_item_after(DisplayChannelClient *dcc, ImageItem *item,
-                                                 PipeItem *pos)
-{
-    if (!dcc) {
-        return;
-    }
-    item->refs++;
-    red_channel_client_pipe_add_after(RED_CHANNEL_CLIENT(dcc), &item->link, pos);
 }
 
 static void release_image_item(ImageItem *item)
@@ -950,34 +927,6 @@ static void red_get_area(DisplayChannel *display, int surface_id, const SpiceRec
 
     canvas = surface->context.canvas;
     canvas->ops->read_bits(canvas, dest, dest_stride, area);
-}
-
-static int rgb32_data_has_alpha(int width, int height, size_t stride,
-                                uint8_t *data, int *all_set_out)
-{
-    uint32_t *line, *end, alpha;
-    int has_alpha;
-
-    has_alpha = FALSE;
-    while (height-- > 0) {
-        line = (uint32_t *)data;
-        end = line + width;
-        data += stride;
-        while (line != end) {
-            alpha = *line & 0xff000000U;
-            if (alpha != 0) {
-                has_alpha = TRUE;
-                if (alpha != 0xff000000U) {
-                    *all_set_out = FALSE;
-                    return TRUE;
-                }
-            }
-            line++;
-        }
-    }
-
-    *all_set_out = has_alpha;
-    return has_alpha;
 }
 
 static inline int red_handle_self_bitmap(RedWorker *worker, Drawable *drawable)
@@ -1857,70 +1806,6 @@ void display_channel_current_flush(DisplayChannel *display, int surface_id)
     current_remove_all(display, surface_id);
 }
 
-// adding the pipe item after pos. If pos == NULL, adding to head.
-ImageItem *dcc_add_surface_area_image(DisplayChannelClient *dcc, int surface_id,
-                                      SpiceRect *area, PipeItem *pos, int can_lossy)
-{
-    DisplayChannel *display = DCC_TO_DC(dcc);
-    RedChannel *channel = RED_CHANNEL(display);
-    RedSurface *surface = &display->surfaces[surface_id];
-    SpiceCanvas *canvas = surface->context.canvas;
-    ImageItem *item;
-    int stride;
-    int width;
-    int height;
-    int bpp;
-    int all_set;
-
-    spice_assert(area);
-
-    width = area->right - area->left;
-    height = area->bottom - area->top;
-    bpp = SPICE_SURFACE_FMT_DEPTH(surface->context.format) / 8;
-    stride = width * bpp;
-
-    item = (ImageItem *)spice_malloc_n_m(height, stride, sizeof(ImageItem));
-
-    red_channel_pipe_item_init(channel, &item->link, PIPE_ITEM_TYPE_IMAGE);
-
-    item->refs = 1;
-    item->surface_id = surface_id;
-    item->image_format =
-        spice_bitmap_from_surface_type(surface->context.format);
-    item->image_flags = 0;
-    item->pos.x = area->left;
-    item->pos.y = area->top;
-    item->width = width;
-    item->height = height;
-    item->stride = stride;
-    item->top_down = surface->context.top_down;
-    item->can_lossy = can_lossy;
-
-    canvas->ops->read_bits(canvas, item->data, stride, area);
-
-    /* For 32bit non-primary surfaces we need to keep any non-zero
-       high bytes as the surface may be used as source to an alpha_blend */
-    if (!is_primary_surface(display, surface_id) &&
-        item->image_format == SPICE_BITMAP_FMT_32BIT &&
-        rgb32_data_has_alpha(item->width, item->height, item->stride, item->data, &all_set)) {
-        if (all_set) {
-            item->image_flags |= SPICE_IMAGE_FLAGS_HIGH_BITS_SET;
-        } else {
-            item->image_format = SPICE_BITMAP_FMT_RGBA;
-        }
-    }
-
-    if (!pos) {
-        red_pipe_add_image_item(dcc, item);
-    } else {
-        red_pipe_add_image_item_after(dcc, item, pos);
-    }
-
-    release_image_item(item);
-
-    return item;
-}
-
 static inline void fill_rects_clip(SpiceMarshaller *m, SpiceClipRects *data)
 {
     int i;
@@ -2549,7 +2434,7 @@ static void red_add_lossless_drawable_dependencies(RedChannelClient *rcc,
         // will be executed before the current drawable
         for (i = 0; i < num_deps; i++) {
             dcc_add_surface_area_image(dcc, deps_surfaces_ids[i], deps_areas[i],
-                                       red_pipe_get_tail(dcc), FALSE);
+                                       dcc_get_tail(dcc), FALSE);
 
         }
     } else {
@@ -2570,7 +2455,7 @@ static void red_add_lossless_drawable_dependencies(RedChannelClient *rcc,
         }
 
         dcc_add_surface_area_image(dcc, drawable->surface_id, &drawable->bbox,
-                                   red_pipe_get_tail(dcc), TRUE);
+                                   dcc_get_tail(dcc), TRUE);
     }
 }
 
