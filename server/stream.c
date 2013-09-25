@@ -243,6 +243,57 @@ static int is_next_stream_frame(DisplayChannel *display,
     }
 }
 
+static void attach_stream(DisplayChannel *display, Drawable *drawable, Stream *stream)
+{
+    DisplayChannelClient *dcc;
+    RingItem *item, *next;
+
+    spice_return_if_fail(!drawable->stream);
+    spice_return_if_fail(!stream->current);
+    spice_return_if_fail(drawable);
+    spice_return_if_fail(stream);
+
+    stream->current = drawable;
+    drawable->stream = stream;
+    stream->last_time = drawable->creation_time;
+    stream->num_input_frames++;
+
+    FOREACH_DCC(display, item, next, dcc) {
+        StreamAgent *agent;
+        QRegion clip_in_draw_dest;
+
+        agent = &dcc->stream_agents[get_stream_id(display, stream)];
+        region_or(&agent->vis_region, &drawable->tree_item.base.rgn);
+
+        region_init(&clip_in_draw_dest);
+        region_add(&clip_in_draw_dest, &drawable->red_drawable->bbox);
+        region_and(&clip_in_draw_dest, &agent->clip);
+
+        if (!region_is_equal(&clip_in_draw_dest, &drawable->tree_item.base.rgn)) {
+            region_remove(&agent->clip, &drawable->red_drawable->bbox);
+            region_or(&agent->clip, &drawable->tree_item.base.rgn);
+            dcc_stream_agent_clip(dcc, agent);
+        }
+#ifdef STREAM_STATS
+        agent->stats.num_input_frames++;
+#endif
+    }
+}
+
+void detach_stream(DisplayChannel *display, Stream *stream,
+                   int detach_sized)
+{
+    spice_return_if_fail(stream->current);
+    spice_return_if_fail(stream->current->stream);
+    spice_return_if_fail(stream->current->stream == stream);
+
+    stream->current->stream = NULL;
+    if (detach_sized) {
+        stream->current->sized_stream = NULL;
+    }
+    stream->current = NULL;
+}
+
 static void before_reattach_stream(DisplayChannel *display,
                                    Stream *stream, Drawable *new_frame)
 {
@@ -353,13 +404,13 @@ static void display_channel_create_stream(DisplayChannel *display, Drawable *dra
     Stream *stream;
     SpiceRect* src_rect;
 
-    spice_assert(!drawable->stream);
+    spice_return_if_fail(!drawable->stream);
 
     if (!(stream = display_channel_stream_try_new(display))) {
         return;
     }
 
-    spice_assert(drawable->red_drawable->type == QXL_DRAW_COPY);
+    spice_return_if_fail(drawable->red_drawable->type == QXL_DRAW_COPY);
     src_rect = &drawable->red_drawable->u.copy.src_area;
 
     ring_add(&display->streams, &stream->link);
