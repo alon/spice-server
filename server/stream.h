@@ -137,8 +137,7 @@ void                  stream_maintenance                            (DisplayChan
 void                  stream_agent_unref                            (DisplayChannel *display,
                                                                      StreamAgent *agent);
 void                  stream_agent_stats_print                      (StreamAgent *agent);
-void                  stream_agent_stop                             (DisplayChannelClient *dcc,
-                                                                     StreamAgent *agent);
+void                  stream_agent_stop                             (StreamAgent *agent);
 
 void detach_stream(DisplayChannel *display, Stream *stream, int detach_sized);
 
