@@ -10295,6 +10295,8 @@ static gboolean watch_func(GIOChannel *source, GIOCondition condition,
     SpiceWatch *watch = data;
     int fd = g_io_channel_unix_get_fd(source);
 
+    spice_return_val_if_fail(!g_source_is_destroyed(watch->source), FALSE);
+
     watch->func(fd, giocondition_to_spice_event(condition), watch->rcc);
 
     return TRUE;
