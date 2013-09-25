@@ -181,44 +181,6 @@ GMainContext* red_worker_get_context(RedWorker *worker)
     return worker->main_context;
 }
 
-/* fixme: move to display channel */
-DrawablePipeItem *drawable_pipe_item_new(DisplayChannelClient *dcc,
-                                         Drawable *drawable)
-{
-    DrawablePipeItem *dpi;
-
-    dpi = spice_malloc0(sizeof(*dpi));
-    dpi->drawable = drawable;
-    dpi->dcc = dcc;
-    ring_item_init(&dpi->base);
-    ring_add(&drawable->pipes, &dpi->base);
-    red_channel_pipe_item_init(RED_CHANNEL_CLIENT(dcc)->channel,
-                               &dpi->dpi_pipe_item, PIPE_ITEM_TYPE_DRAW);
-    dpi->refs++;
-    drawable->refs++;
-    return dpi;
-}
-
-DrawablePipeItem *drawable_pipe_item_ref(DrawablePipeItem *dpi)
-{
-    dpi->refs++;
-    return dpi;
-}
-
-void drawable_pipe_item_unref(DrawablePipeItem *dpi)
-{
-    DisplayChannel *display = DCC_TO_DC(dpi->dcc);
-
-    if (--dpi->refs) {
-        return;
-    }
-
-    spice_return_if_fail(!ring_item_is_linked(&dpi->dpi_pipe_item.link));
-    spice_return_if_fail(!ring_item_is_linked(&dpi->base));
-    display_channel_drawable_unref(display, dpi->drawable);
-    free(dpi);
-}
-
 QXLInstance* red_worker_get_qxl(RedWorker *worker)
 {
     spice_return_val_if_fail(worker != NULL, NULL);
@@ -242,35 +204,6 @@ static inline int validate_surface(DisplayChannel *display, uint32_t surface_id)
 }
 
 
-static inline void red_handle_drawable_surfaces_client_synced(
-                        DisplayChannelClient *dcc, Drawable *drawable)
-{
-    DisplayChannel *display = DCC_TO_DC(dcc);
-    int x;
-
-    for (x = 0; x < 3; ++x) {
-        int surface_id;
-
-        surface_id = drawable->surface_deps[x];
-        if (surface_id != -1) {
-            if (dcc->surface_client_created[surface_id] == TRUE) {
-                continue;
-            }
-            dcc_create_surface(dcc, surface_id);
-            display_channel_current_flush(display, surface_id);
-            dcc_push_surface_image(dcc, surface_id);
-        }
-    }
-
-    if (dcc->surface_client_created[drawable->surface_id] == TRUE) {
-        return;
-    }
-
-    dcc_create_surface(dcc, drawable->surface_id);
-    display_channel_current_flush(display, drawable->surface_id);
-    dcc_push_surface_image(dcc, drawable->surface_id);
-}
-
 static int display_is_connected(RedWorker *worker)
 {
     return worker->display_channel &&
@@ -281,76 +214,6 @@ static int cursor_is_connected(RedWorker *worker)
 {
     return worker->cursor_channel &&
         red_channel_is_connected(RED_CHANNEL(worker->cursor_channel));
-}
-
-void dcc_add_drawable(DisplayChannelClient *dcc, Drawable *drawable)
-{
-    DrawablePipeItem *dpi;
-
-    red_handle_drawable_surfaces_client_synced(dcc, drawable);
-    dpi = drawable_pipe_item_new(dcc, drawable);
-    red_channel_client_pipe_add(RED_CHANNEL_CLIENT(dcc), &dpi->dpi_pipe_item);
-}
-
-void red_pipes_add_drawable(DisplayChannel *display, Drawable *drawable)
-{
-    DisplayChannelClient *dcc;
-    RingItem *dcc_ring_item, *next;
-
-    spice_warn_if(!ring_is_empty(&drawable->pipes));
-    FOREACH_DCC(display, dcc_ring_item, next, dcc) {
-        dcc_add_drawable(dcc, drawable);
-    }
-}
-
-static void dcc_add_drawable_to_tail(DisplayChannelClient *dcc, Drawable *drawable)
-{
-    DrawablePipeItem *dpi;
-
-    if (!dcc) {
-        return;
-    }
-    red_handle_drawable_surfaces_client_synced(dcc, drawable);
-    dpi = drawable_pipe_item_new(dcc, drawable);
-    red_channel_client_pipe_add_tail(RED_CHANNEL_CLIENT(dcc), &dpi->dpi_pipe_item);
-}
-
-void red_pipes_add_drawable_after(DisplayChannel *display,
-                                  Drawable *drawable, Drawable *pos_after)
-{
-    DrawablePipeItem *dpi, *dpi_pos_after;
-    RingItem *dpi_link, *dpi_next;
-    DisplayChannelClient *dcc;
-    int num_other_linked = 0;
-
-    DRAWABLE_FOREACH_DPI_SAFE(pos_after, dpi_link, dpi_next, dpi_pos_after) {
-        num_other_linked++;
-        dcc = dpi_pos_after->dcc;
-        red_handle_drawable_surfaces_client_synced(dcc, drawable);
-        dpi = drawable_pipe_item_new(dcc, drawable);
-        red_channel_client_pipe_add_after(RED_CHANNEL_CLIENT(dcc), &dpi->dpi_pipe_item,
-                                          &dpi_pos_after->dpi_pipe_item);
-    }
-    if (num_other_linked == 0) {
-        red_pipes_add_drawable(display, drawable);
-        return;
-    }
-    if (num_other_linked != display->common.base.clients_num) {
-        RingItem *item, *next;
-        spice_debug("TODO: not O(n^2)");
-        FOREACH_DCC(display, item, next, dcc) {
-            int sent = 0;
-            DRAWABLE_FOREACH_DPI_SAFE(pos_after, dpi_link, dpi_next, dpi_pos_after) {
-                if (dpi_pos_after->dcc == dcc) {
-                    sent = 1;
-                    break;
-                }
-            }
-            if (!sent) {
-                dcc_add_drawable(dcc, drawable);
-            }
-        }
-    }
 }
 
 static inline PipeItem *red_pipe_get_tail(DisplayChannelClient *dcc)
@@ -1378,10 +1241,7 @@ static gboolean red_process_draw(RedWorker *worker, QXLCommandExt *ext_cmd)
         goto end;
     }
 
-    if (display_channel_add_drawable(worker->display_channel, drawable)) {
-        red_pipes_add_drawable(worker->display_channel, drawable);
-    }
-
+    display_channel_add_drawable(worker->display_channel, drawable);
     success = TRUE;
 
 end:
@@ -2684,7 +2544,7 @@ static void red_add_lossless_drawable_dependencies(RedChannelClient *rcc,
 
     if (!sync_rendered) {
         // pushing the pipe item back to the pipe
-        dcc_add_drawable_to_tail(dcc, item);
+        dcc_add_drawable(dcc, item, TRUE);
         // the surfaces areas will be sent as DRAW_COPY commands, that
         // will be executed before the current drawable
         for (i = 0; i < num_deps; i++) {

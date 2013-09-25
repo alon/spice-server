@@ -99,19 +99,6 @@ enum {
     PIPE_ITEM_TYPE_STREAM_ACTIVATE_REPORT,
 };
 
-typedef struct DrawablePipeItem {
-    RingItem base;  /* link for a list of pipe items held by Drawable */
-    PipeItem dpi_pipe_item; /* link for the client's pipe itself */
-    Drawable *drawable;
-    DisplayChannelClient *dcc;
-    uint8_t refs;
-} DrawablePipeItem;
-
-DrawablePipeItem*          drawable_pipe_item_new                    (DisplayChannelClient *dcc,
-                                                                      Drawable *drawable);
-void                       drawable_pipe_item_unref                  (DrawablePipeItem *dpi);
-DrawablePipeItem*          drawable_pipe_item_ref                    (DrawablePipeItem *dpi);
-
 typedef struct MonitorsConfig {
     int refs;
     int count;
@@ -267,7 +254,7 @@ void                       display_channel_set_surface_release_info  (DisplayCha
                                                                       QXLReleaseInfo *info,
                                                                       uint32_t group_id);
 void                       display_channel_show_tree                 (DisplayChannel *display);
-int                        display_channel_add_drawable              (DisplayChannel *display,
+void                       display_channel_add_drawable              (DisplayChannel *display,
                                                                       Drawable *drawable);
 void                       display_channel_current_flush             (DisplayChannel *display,
                                                                       int surface_id);
@@ -391,12 +378,8 @@ static inline void region_add_clip_rects(QRegion *rgn, SpiceClipRects *data)
     }
 }
 
-void red_pipes_add_drawable(DisplayChannel *display, Drawable *drawable);
 void current_remove_drawable(DisplayChannel *display, Drawable *item);
-void red_pipes_add_drawable_after(DisplayChannel *display,
-                                  Drawable *drawable, Drawable *pos_after);
 void red_pipes_remove_drawable(Drawable *drawable);
-void dcc_add_drawable(DisplayChannelClient *dcc, Drawable *drawable);
 void current_remove(DisplayChannel *display, TreeItem *item);
 void detach_streams_behind(DisplayChannel *display, QRegion *region, Drawable *drawable);
 
