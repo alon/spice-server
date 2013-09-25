@@ -3965,7 +3965,7 @@ static void red_display_marshall_stream_end(RedChannelClient *rcc,
 
     red_channel_client_init_send_data(rcc, SPICE_MSG_DISPLAY_STREAM_DESTROY, NULL);
     destroy.id = get_stream_id(DCC_TO_DC(dcc), agent->stream);
-    stream_agent_stop(dcc, agent);
+    stream_agent_stop(agent);
     spice_marshall_msg_display_stream_destroy(base_marshaller, &destroy);
 }
 

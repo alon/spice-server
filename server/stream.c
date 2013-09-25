@@ -596,8 +596,7 @@ static void dcc_update_streams_max_latency(DisplayChannelClient *dcc, StreamAgen
     dcc->streams_max_latency = new_max_latency;
 }
 
-static uint64_t red_stream_get_initial_bit_rate(DisplayChannelClient *dcc,
-                                                Stream *stream)
+static uint64_t get_initial_bit_rate(DisplayChannelClient *dcc, Stream *stream)
 {
     char *env_bit_rate_str;
     uint64_t bit_rate = 0;
@@ -644,7 +643,7 @@ static uint64_t red_stream_get_initial_bit_rate(DisplayChannelClient *dcc,
             stream->width * stream->height) / DCC_TO_DC(dcc)->streams_size_total;
 }
 
-static uint32_t red_stream_mjpeg_encoder_get_roundtrip(void *opaque)
+static uint32_t get_roundtrip_ms(void *opaque)
 {
     StreamAgent *agent = opaque;
     int roundtrip;
@@ -664,14 +663,14 @@ static uint32_t red_stream_mjpeg_encoder_get_roundtrip(void *opaque)
     return roundtrip;
 }
 
-static uint32_t red_stream_mjpeg_encoder_get_source_fps(void *opaque)
+static uint32_t get_source_fps(void *opaque)
 {
     StreamAgent *agent = opaque;
 
     return agent->stream->input_fps;
 }
 
-static void red_stream_update_client_playback_latency(void *opaque, uint32_t delay_ms)
+static void update_client_playback_delay(void *opaque, uint32_t delay_ms)
 {
     StreamAgent *agent = opaque;
     DisplayChannelClient *dcc = agent->dcc;
@@ -708,11 +707,11 @@ void dcc_create_stream(DisplayChannelClient *dcc, Stream *stream)
         MJpegEncoderRateControlCbs mjpeg_cbs;
         uint64_t initial_bit_rate;
 
-        mjpeg_cbs.get_roundtrip_ms = red_stream_mjpeg_encoder_get_roundtrip;
-        mjpeg_cbs.get_source_fps = red_stream_mjpeg_encoder_get_source_fps;
-        mjpeg_cbs.update_client_playback_delay = red_stream_update_client_playback_latency;
+        mjpeg_cbs.get_roundtrip_ms = get_roundtrip_ms;
+        mjpeg_cbs.get_source_fps = get_source_fps;
+        mjpeg_cbs.update_client_playback_delay = update_client_playback_delay;
 
-        initial_bit_rate = red_stream_get_initial_bit_rate(dcc, stream);
+        initial_bit_rate = get_initial_bit_rate(dcc, stream);
         agent->mjpeg_encoder = mjpeg_encoder_new(TRUE, initial_bit_rate, &mjpeg_cbs, agent);
     } else {
         agent->mjpeg_encoder = mjpeg_encoder_new(FALSE, 0, NULL, NULL);
@@ -736,8 +735,10 @@ void dcc_create_stream(DisplayChannelClient *dcc, Stream *stream)
 #endif
 }
 
-void stream_agent_stop(DisplayChannelClient *dcc, StreamAgent *agent)
+void stream_agent_stop(StreamAgent *agent)
 {
+    DisplayChannelClient *dcc = agent->dcc;
+
     dcc_update_streams_max_latency(dcc, agent);
     if (agent->mjpeg_encoder) {
         mjpeg_encoder_destroy(agent->mjpeg_encoder);
