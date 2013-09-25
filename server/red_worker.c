@@ -159,8 +159,7 @@ typedef struct BitmapData {
     SpiceRect lossy_rect;
 } BitmapData;
 
-static void red_draw_qxl_drawable(DisplayChannel *display, Drawable *drawable);
-static void red_draw_drawable(DisplayChannel *display, Drawable *item);
+static void drawable_draw(DisplayChannel *display, Drawable *item);
 static void red_update_area(DisplayChannel *display, const SpiceRect *area, int surface_id);
 static void red_update_area_till(DisplayChannel *display, const SpiceRect *area, int surface_id,
                                  Drawable *last);
@@ -1248,7 +1247,7 @@ static bool free_one_drawable(DisplayChannel *display, int force_glz_free)
             dcc_free_glz_drawable(glz->dcc, glz);
         }
     }
-    red_draw_drawable(display, drawable);
+    drawable_draw(display, drawable);
     container = drawable->tree_item.base.container;
 
     current_remove_drawable(display, drawable);
@@ -1514,21 +1513,19 @@ static void image_surface_init(DisplayChannel *display)
     display->image_surfaces.ops = &image_surfaces_ops;
 }
 
-static void red_draw_qxl_drawable(DisplayChannel *display, Drawable *drawable)
+static void drawable_draw(DisplayChannel *display, Drawable *drawable)
 {
     RedSurface *surface;
     SpiceCanvas *canvas;
     SpiceClip clip = drawable->red_drawable->clip;
 
+    red_flush_source_surfaces(display, drawable);
+
     surface = &display->surfaces[drawable->surface_id];
     canvas = surface->context.canvas;
+    spice_return_if_fail(canvas);
 
     image_cache_aging(&display->image_cache);
-
-    if (!canvas) {
-        spice_warning("ignoring drawable to destroyed surface %d\n", drawable->surface_id);
-        return;
-    }
 
     region_add(&surface->draw_dirty_region, &drawable->red_drawable->bbox);
 
@@ -1656,12 +1653,6 @@ static void red_draw_qxl_drawable(DisplayChannel *display, Drawable *drawable)
     }
 }
 
-static void red_draw_drawable(DisplayChannel *display, Drawable *drawable)
-{
-    red_flush_source_surfaces(display, drawable);
-    red_draw_qxl_drawable(display, drawable);
-}
-
 static void validate_area(DisplayChannel *display, const SpiceRect *area, uint32_t surface_id)
 {
     RedSurface *surface;
@@ -1755,12 +1746,12 @@ static void red_update_area_till(DisplayChannel *display, const SpiceRect *area,
         container = now->tree_item.base.container;
         current_remove_drawable(display, now);
         container_cleanup(container);
-        /* red_draw_drawable may call red_update_area for the surfaces 'now' depends on. Notice,
+        /* drawable_draw may call red_update_area for the surfaces 'now' depends on. Notice,
            that it is valid to call red_update_area in this case and not red_update_area_till:
            It is impossible that there was newer item then 'last' in one of the surfaces
            that red_update_area is called for, Otherwise, 'now' would have already been rendered.
            See the call for red_handle_depends_on_target_surface in red_process_draw */
-        red_draw_drawable(display, now);
+        drawable_draw(display, now);
         display_channel_drawable_unref(display, now);
     } while (now != surface_last);
     validate_area(display, area, surface_id);
@@ -1813,7 +1804,7 @@ static void red_update_area(DisplayChannel *display, const SpiceRect *area, int 
         container = now->tree_item.base.container;
         current_remove_drawable(display, now);
         container_cleanup(container);
-        red_draw_drawable(display, now);
+        drawable_draw(display, now);
         display_channel_drawable_unref(display, now);
     } while (now != last);
     validate_area(display, area, surface_id);
