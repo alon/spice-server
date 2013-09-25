@@ -5689,34 +5689,6 @@ static void handle_new_display_channel(RedWorker *worker, RedClient *client, Red
     dcc_start(dcc);
 }
 
-static void red_connect_cursor(RedWorker *worker, RedClient *client, RedsStream *stream,
-                               int migrate,
-                               uint32_t *common_caps, int num_common_caps,
-                               uint32_t *caps, int num_caps)
-{
-    CursorChannel *channel;
-    CursorChannelClient *ccc;
-
-    spice_return_if_fail(worker->cursor_channel != NULL);
-
-    channel = worker->cursor_channel;
-    spice_info("add cursor channel client");
-    ccc = cursor_channel_client_new(channel, client, stream,
-                                    migrate,
-                                    common_caps, num_common_caps,
-                                    caps, num_caps);
-    spice_return_if_fail(ccc != NULL);
-
-    RedChannelClient *rcc = RED_CHANNEL_CLIENT(ccc);
-    red_channel_client_ack_zero_messages_window(rcc);
-    red_channel_client_push_set_ack(rcc);
-
-    // TODO: why do we check for context.canvas? defer this to after display cc is connected
-    // and test it's canvas? this is just a test to see if there is an active renderer?
-    if (display_channel_surface_has_canvas(worker->display_channel, 0))
-        cursor_channel_init(channel, ccc);
-}
-
 static void surface_dirty_region_to_rects(RedSurface *surface,
                                           QXLRect *qxl_dirty_rects,
                                           uint32_t num_dirty_rects)
@@ -6205,19 +6177,39 @@ static void handle_dev_monitors_config_async(void *opaque,
     red_worker_push_monitors_config(worker);
 }
 
+static void cursor_connect(RedWorker *worker, RedClient *client, RedsStream *stream,
+                           int migrate,
+                           uint32_t *common_caps, int num_common_caps,
+                           uint32_t *caps, int num_caps)
+{
+    CursorChannel *channel = worker->cursor_channel;
+    CursorChannelClient *ccc;
+
+    spice_return_if_fail(worker->cursor_channel != NULL);
+
+    spice_info("add cursor channel client");
+    ccc = cursor_channel_client_new(channel, client, stream,
+                                    migrate,
+                                    common_caps, num_common_caps,
+                                    caps, num_caps);
+
+    // TODO: why do we check for context.canvas? defer this to after display cc is connected
+    // and test it's canvas? this is just a test to see if there is an active renderer?
+    if (display_channel_surface_has_canvas(worker->display_channel, 0))
+        cursor_channel_init(channel, ccc);
+}
+
 /* TODO: special, perhaps use another dispatcher? */
 static void handle_dev_cursor_connect(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageCursorConnect *msg = payload;
     RedWorker *worker = opaque;
-    RedsStream *stream = msg->stream;
-    RedClient *client = msg->client;
-    int migration = msg->migration;
 
     spice_info("cursor connect");
-    red_connect_cursor(worker, client, stream, migration,
-                       msg->common_caps, msg->num_common_caps,
-                       msg->caps, msg->num_caps);
+    cursor_connect(worker,
+                   msg->client, msg->stream, msg->migration,
+                   msg->common_caps, msg->num_common_caps,
+                   msg->caps, msg->num_caps);
     free(msg->caps);
     free(msg->common_caps);
 }

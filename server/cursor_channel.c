@@ -468,6 +468,9 @@ CursorChannelClient* cursor_channel_client_new(CursorChannel *cursor, RedClient 
     ring_init(&ccc->cursor_cache_lru);
     ccc->cursor_cache_available = CLIENT_CURSOR_CACHE_SIZE;
 
+    RedChannelClient *rcc = RED_CHANNEL_CLIENT(ccc);
+    red_channel_client_ack_zero_messages_window(rcc);
+    red_channel_client_push_set_ack(rcc);
 
     return ccc;
 }
