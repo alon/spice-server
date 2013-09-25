@@ -4207,63 +4207,6 @@ static void red_migrate_display(DisplayChannel *display, RedChannelClient *rcc)
     }
 }
 
-#ifdef USE_OPENGL
-static SpiceCanvas *create_ogl_context_common(DisplayChannel *display, OGLCtx *ctx,
-                                              uint32_t width, uint32_t height,
-                                              int32_t stride, uint8_t depth)
-{
-    SpiceCanvas *canvas;
-
-    oglctx_make_current(ctx);
-    if (!(canvas = gl_canvas_create(width, height, depth, &display->image_cache.base,
-                                    &display->image_surfaces, NULL, NULL, NULL))) {
-        return NULL;
-    }
-
-    spice_canvas_set_usr_data(canvas, ctx, (spice_destroy_fn_t)oglctx_destroy);
-
-    canvas->ops->clear(canvas);
-
-    return canvas;
-}
-
-static SpiceCanvas *create_ogl_pbuf_context(DisplayChannel *display, uint32_t width,
-                                            uint32_t height, int32_t stride, uint8_t depth)
-{
-    OGLCtx *ctx;
-    SpiceCanvas *canvas;
-
-    if (!(ctx = pbuf_create(width, height))) {
-        return NULL;
-    }
-
-    if (!(canvas = create_ogl_context_common(display, ctx, width, height, stride, depth))) {
-        oglctx_destroy(ctx);
-        return NULL;
-    }
-
-    return canvas;
-}
-
-static SpiceCanvas *create_ogl_pixmap_context(DisplayChannel *display, uint32_t width,
-                                              uint32_t height, int32_t stride, uint8_t depth)
-{
-    OGLCtx *ctx;
-    SpiceCanvas *canvas;
-
-    if (!(ctx = pixmap_create(width, height))) {
-        return NULL;
-    }
-
-    if (!(canvas = create_ogl_context_common(display, ctx, width, height, stride, depth))) {
-        oglctx_destroy(ctx);
-        return NULL;
-    }
-
-    return canvas;
-}
-#endif
-
 static inline void *create_canvas_for_surface(DisplayChannel *display, RedSurface *surface,
                                               uint32_t renderer, uint32_t width, uint32_t height,
                                               int32_t stride, uint32_t format, void *line_0)
@@ -4279,18 +4222,6 @@ static inline void *create_canvas_for_surface(DisplayChannel *display, RedSurfac
         surface->context.top_down = TRUE;
         surface->context.canvas_draws_on_surface = TRUE;
         return canvas;
-#ifdef USE_OPENGL
-    case RED_RENDERER_OGL_PBUF:
-        canvas = create_ogl_pbuf_context(display, width, height, stride,
-                                         SPICE_SURFACE_FMT_DEPTH(format));
-        surface->context.top_down = FALSE;
-        return canvas;
-    case RED_RENDERER_OGL_PIXMAP:
-        canvas = create_ogl_pixmap_context(display, width, height, stride,
-                                           SPICE_SURFACE_FMT_DEPTH(format));
-        surface->context.top_down = FALSE;
-        return canvas;
-#endif
     default:
         spice_error("invalid renderer type");
     };

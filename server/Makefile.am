@@ -124,13 +124,6 @@ libspice_server_la_SOURCES =			\
 	dcc_encoders.h					\
 	$(NULL)
 
-if SUPPORT_GL
-libspice_server_la_SOURCES +=	\
-	reds_gl_canvas.c	\
-	reds_gl_canvas.h	\
-	$(NULL)
-endif
-
 if SUPPORT_SMARTCARD
 libspice_server_la_SOURCES +=	\
 	smartcard.c		\
