@@ -213,8 +213,8 @@ void drawable_pipe_item_unref(DrawablePipeItem *dpi)
         return;
     }
 
-    spice_warn_if_fail(!ring_item_is_linked(&dpi->dpi_pipe_item.link));
-    spice_warn_if_fail(!ring_item_is_linked(&dpi->base));
+    spice_return_if_fail(!ring_item_is_linked(&dpi->dpi_pipe_item.link));
+    spice_return_if_fail(!ring_item_is_linked(&dpi->base));
     display_channel_drawable_unref(display, dpi->drawable);
     free(dpi);
 }
@@ -224,11 +224,6 @@ QXLInstance* red_worker_get_qxl(RedWorker *worker)
     spice_return_val_if_fail(worker != NULL, NULL);
 
     return worker->qxl;
-}
-
-static inline void __validate_surface(DisplayChannel *display, uint32_t surface_id)
-{
-    spice_warn_if(surface_id >= display->n_surfaces);
 }
 
 static inline int validate_surface(DisplayChannel *display, uint32_t surface_id)
@@ -1407,7 +1402,7 @@ static inline void red_process_surface(RedWorker *worker, RedSurfaceCmd *surface
     uint8_t *data;
 
     surface_id = surface->surface_id;
-    __validate_surface(display, surface_id);
+    spice_return_if_fail(surface_id < display->n_surfaces);
 
     red_surface = &display->surfaces[surface_id];
 
