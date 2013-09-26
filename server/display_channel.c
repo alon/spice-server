@@ -751,9 +751,10 @@ static int current_add(DisplayChannel *display, Ring *ring, Drawable *drawable)
         current_add_drawable(display, drawable, ring);
     } else {
         /*
-         * red_detach_streams_behind can affect the current tree since it may
-         * trigger calls to update_area. Thus, the drawable should be added to the tree
-         * before calling red_detach_streams_behind
+         * red_detach_streams_behind can affect the current tree since
+         * it may trigger calls to display_channel_draw. Thus, the
+         * drawable should be added to the tree before calling
+         * red_detach_streams_behind
          */
         current_add_drawable(display, drawable, ring);
         if (is_primary_surface(display, drawable->surface_id)) {
@@ -1095,7 +1096,7 @@ void display_channel_drawable_unref(DisplayChannel *display, Drawable *drawable)
     display->drawable_count--;
 }
 
-static void drawable_deps_update(DisplayChannel *display, Drawable *drawable)
+static void drawable_deps_draw(DisplayChannel *display, Drawable *drawable)
 {
     int x;
     int surface_id;
@@ -1104,7 +1105,7 @@ static void drawable_deps_update(DisplayChannel *display, Drawable *drawable)
         surface_id = drawable->surface_deps[x];
         if (surface_id != -1 && drawable->depend_items[x].drawable) {
             depended_item_remove(&drawable->depend_items[x]);
-            red_update_area(display, &drawable->red_drawable->surfaces_rects[x], surface_id);
+            display_channel_draw(display, &drawable->red_drawable->surfaces_rects[x], surface_id);
         }
     }
 }
@@ -1115,7 +1116,7 @@ void drawable_draw(DisplayChannel *display, Drawable *drawable)
     SpiceCanvas *canvas;
     SpiceClip clip = drawable->red_drawable->clip;
 
-    drawable_deps_update(display, drawable);
+    drawable_deps_draw(display, drawable);
 
     surface = &display->surfaces[drawable->surface_id];
     canvas = surface->context.canvas;

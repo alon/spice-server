@@ -234,6 +234,13 @@ typedef struct UpgradeItem {
 } UpgradeItem;
 
 
+void                       display_channel_draw                      (DisplayChannel *display,
+                                                                      const SpiceRect *area,
+                                                                      int surface_id);
+void                       display_channel_draw_till                 (DisplayChannel *display,
+                                                                      const SpiceRect *area,
+                                                                      int surface_id,
+                                                                      Drawable *last);
 void                       display_channel_free_some                 (DisplayChannel *display);
 void                       display_channel_set_stream_video          (DisplayChannel *display,
                                                                       int stream_video);
@@ -385,8 +392,5 @@ void detach_streams_behind(DisplayChannel *display, QRegion *region, Drawable *d
 void drawable_draw(DisplayChannel *display, Drawable *item);
 void current_remove_all(DisplayChannel *display, int surface_id);
 void drawables_init(DisplayChannel *display);
-void red_update_area(DisplayChannel *display, const SpiceRect *area, int surface_id);
-void red_update_area_till(DisplayChannel *display, const SpiceRect *area, int surface_id,
-                          Drawable *last);
 
 #endif /* DISPLAY_CHANNEL_H_ */
