@@ -78,9 +78,6 @@
 
 #define MAX_PIPE_SIZE 50
 
-#define WIDE_CLIENT_ACK_WINDOW 40
-#define NARROW_CLIENT_ACK_WINDOW 20
-
 typedef struct RedWorker {
     pthread_t thread;
     clockid_t clockid;
@@ -4377,20 +4374,6 @@ static inline void flush_all_qxl_commands(RedWorker *worker)
     flush_cursor_commands(worker);
 }
 
-static int dcc_handle_migrate_glz_dictionary(DisplayChannelClient *dcc,
-                                             SpiceMigrateDataDisplay *migrate)
-{
-    spice_return_val_if_fail(!dcc->glz_dict, FALSE);
-
-    ring_init(&dcc->glz_drawables);
-    ring_init(&dcc->glz_drawables_inst_to_free);
-    pthread_mutex_init(&dcc->glz_drawables_inst_to_free_lock, NULL);
-    dcc->glz_dict = dcc_restore_glz_dictionary(dcc,
-                                               migrate->glz_dict_id,
-                                               &migrate->glz_dict_data);
-    return dcc->glz_dict != NULL;
-}
-
 static int display_channel_handle_migrate_mark(RedChannelClient *rcc)
 {
     DisplayChannel *display_channel = SPICE_CONTAINEROF(rcc->channel, DisplayChannel, common.base);
@@ -4400,8 +4383,7 @@ static int display_channel_handle_migrate_mark(RedChannelClient *rcc)
     return TRUE;
 }
 
-static uint64_t display_channel_handle_migrate_data_get_serial(
-                RedChannelClient *rcc, uint32_t size, void *message)
+static uint64_t handle_migrate_data_get_serial(RedChannelClient *rcc, uint32_t size, void *message)
 {
     SpiceMigrateDataDisplay *migrate_data;
 
@@ -4410,146 +4392,9 @@ static uint64_t display_channel_handle_migrate_data_get_serial(
     return migrate_data->message_serial;
 }
 
-static int display_channel_client_restore_surface(DisplayChannelClient *dcc, uint32_t surface_id)
+static int handle_migrate_data(RedChannelClient *rcc, uint32_t size, void *message)
 {
-    /* we don't process commands till we receive the migration data, thus,
-     * we should have not sent any surface to the client. */
-    if (dcc->surface_client_created[surface_id]) {
-        spice_warning("surface %u is already marked as client_created", surface_id);
-        return FALSE;
-    }
-    dcc->surface_client_created[surface_id] = TRUE;
-    return TRUE;
-}
-
-static int display_channel_client_restore_surfaces_lossless(DisplayChannelClient *dcc,
-                                                            MigrateDisplaySurfacesAtClientLossless *mig_surfaces)
-{
-    uint32_t i;
-
-    spice_debug(NULL);
-    for (i = 0; i < mig_surfaces->num_surfaces; i++) {
-        uint32_t surface_id = mig_surfaces->surfaces[i].id;
-
-        if (!display_channel_client_restore_surface(dcc, surface_id)) {
-            return FALSE;
-        }
-    }
-    return TRUE;
-}
-
-static int display_channel_client_restore_surfaces_lossy(DisplayChannelClient *dcc,
-                                                          MigrateDisplaySurfacesAtClientLossy *mig_surfaces)
-{
-    uint32_t i;
-
-    spice_debug(NULL);
-    for (i = 0; i < mig_surfaces->num_surfaces; i++) {
-        uint32_t surface_id = mig_surfaces->surfaces[i].id;
-        SpiceMigrateDataRect *mig_lossy_rect;
-        SpiceRect lossy_rect;
-
-        if (!display_channel_client_restore_surface(dcc, surface_id)) {
-            return FALSE;
-        }
-        spice_assert(dcc->surface_client_created[surface_id]);
-
-        mig_lossy_rect = &mig_surfaces->surfaces[i].lossy_rect;
-        lossy_rect.left = mig_lossy_rect->left;
-        lossy_rect.top = mig_lossy_rect->top;
-        lossy_rect.right = mig_lossy_rect->right;
-        lossy_rect.bottom = mig_lossy_rect->bottom;
-        region_init(&dcc->surface_client_lossy_region[surface_id]);
-        region_add(&dcc->surface_client_lossy_region[surface_id], &lossy_rect);
-    }
-    return TRUE;
-}
-static int display_channel_handle_migrate_data(RedChannelClient *rcc, uint32_t size,
-                                               void *message)
-{
-    SpiceMigrateDataHeader *header;
-    SpiceMigrateDataDisplay *migrate_data;
-    DisplayChannel *display_channel = SPICE_CONTAINEROF(rcc->channel, DisplayChannel, common.base);
-    DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
-    uint8_t *surfaces;
-    int surfaces_restored = FALSE;
-    int i;
-
-    spice_debug(NULL);
-    if (size < sizeof(*migrate_data) + sizeof(SpiceMigrateDataHeader)) {
-        spice_error("bad message size");
-        return FALSE;
-    }
-    header = (SpiceMigrateDataHeader *)message;
-    migrate_data = (SpiceMigrateDataDisplay *)(header + 1);
-    if (!migration_protocol_validate_header(header,
-                                            SPICE_MIGRATE_DATA_DISPLAY_MAGIC,
-                                            SPICE_MIGRATE_DATA_DISPLAY_VERSION)) {
-        spice_error("bad header");
-        return FALSE;
-    }
-    /* size is set to -1 in order to keep the cache frozen until the original
-     * channel client that froze the cache on the src size receives the migrate
-     * data and unfreezes the cache by setting its size > 0 and by triggering
-     * pixmap_cache_reset */
-    dcc->pixmap_cache = pixmap_cache_get(RED_CHANNEL_CLIENT(dcc)->client,
-                                         migrate_data->pixmap_cache_id, -1);
-    if (!dcc->pixmap_cache) {
-        return FALSE;
-    }
-    pthread_mutex_lock(&dcc->pixmap_cache->lock);
-    for (i = 0; i < MAX_CACHE_CLIENTS; i++) {
-        dcc->pixmap_cache->sync[i] = MAX(dcc->pixmap_cache->sync[i],
-                                         migrate_data->pixmap_cache_clients[i]);
-    }
-    pthread_mutex_unlock(&dcc->pixmap_cache->lock);
-
-    if (migrate_data->pixmap_cache_freezer) {
-        /* activating the cache. The cache will start to be active after
-         * pixmap_cache_reset is called, when handling PIPE_ITEM_TYPE_PIXMAP_RESET */
-        dcc->pixmap_cache->size = migrate_data->pixmap_cache_size;
-        red_channel_client_pipe_add_type(rcc,
-                                         PIPE_ITEM_TYPE_PIXMAP_RESET);
-    }
-
-    if (dcc_handle_migrate_glz_dictionary(dcc, migrate_data)) {
-        dcc->glz = glz_encoder_create(dcc->common.id,
-                                      dcc->glz_dict->dict, &dcc->glz_data.usr);
-        if (!dcc->glz) {
-            spice_critical("create global lz failed");
-        }
-    } else {
-        spice_critical("restoring global lz dictionary failed");
-    }
-
-    dcc->common.is_low_bandwidth = migrate_data->low_bandwidth_setting;
-
-    if (migrate_data->low_bandwidth_setting) {
-        red_channel_client_ack_set_client_window(rcc, WIDE_CLIENT_ACK_WINDOW);
-        if (dcc->jpeg_state == SPICE_WAN_COMPRESSION_AUTO) {
-            display_channel->enable_jpeg = TRUE;
-        }
-        if (dcc->zlib_glz_state == SPICE_WAN_COMPRESSION_AUTO) {
-            display_channel->enable_zlib_glz_wrap = TRUE;
-        }
-    }
-
-    surfaces = (uint8_t *)message + migrate_data->surfaces_at_client_ptr;
-    if (display_channel->enable_jpeg) {
-        surfaces_restored = display_channel_client_restore_surfaces_lossy(dcc,
-                                (MigrateDisplaySurfacesAtClientLossy *)surfaces);
-    } else {
-        surfaces_restored = display_channel_client_restore_surfaces_lossless(dcc,
-                                (MigrateDisplaySurfacesAtClientLossless*)surfaces);
-    }
-
-    if (!surfaces_restored) {
-        return FALSE;
-    }
-    red_channel_client_pipe_add_type(rcc, PIPE_ITEM_TYPE_INVAL_PALLET_CACHE);
-    /* enable sending messages */
-    red_channel_client_ack_zero_messages_window(rcc);
-    return TRUE;
+    return dcc_handle_migrate_data(RCC_TO_DCC(rcc), size, message);
 }
 
 static int common_channel_config_socket(RedChannelClient *rcc)
@@ -4967,8 +4812,8 @@ static void display_channel_create(RedWorker *worker, int migrate, uint32_t n_su
         .hold_item = display_channel_hold_pipe_item,
         .release_item = display_channel_release_item,
         .handle_migrate_flush_mark = display_channel_handle_migrate_mark,
-        .handle_migrate_data = display_channel_handle_migrate_data,
-        .handle_migrate_data_get_serial = display_channel_handle_migrate_data_get_serial
+        .handle_migrate_data = handle_migrate_data,
+        .handle_migrate_data_get_serial = handle_migrate_data_get_serial
     };
 
     spice_return_if_fail(num_renderers > 0);

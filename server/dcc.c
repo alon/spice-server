@@ -1128,3 +1128,138 @@ int dcc_handle_message(RedChannelClient *rcc, uint32_t size, uint16_t type, void
         return red_channel_client_handle_message(rcc, size, type, msg);
     }
 }
+
+static int dcc_handle_migrate_glz_dictionary(DisplayChannelClient *dcc,
+                                             SpiceMigrateDataDisplay *migrate)
+{
+    spice_return_val_if_fail(!dcc->glz_dict, FALSE);
+
+    ring_init(&dcc->glz_drawables);
+    ring_init(&dcc->glz_drawables_inst_to_free);
+    pthread_mutex_init(&dcc->glz_drawables_inst_to_free_lock, NULL);
+    dcc->glz_dict = dcc_restore_glz_dictionary(dcc,
+                                               migrate->glz_dict_id,
+                                               &migrate->glz_dict_data);
+    return dcc->glz_dict != NULL;
+}
+
+static int restore_surface(DisplayChannelClient *dcc, uint32_t surface_id)
+{
+    /* we don't process commands till we receive the migration data, thus,
+     * we should have not sent any surface to the client. */
+    if (dcc->surface_client_created[surface_id]) {
+        spice_warning("surface %u is already marked as client_created", surface_id);
+        return FALSE;
+    }
+    dcc->surface_client_created[surface_id] = TRUE;
+    return TRUE;
+}
+
+static int restore_surfaces_lossless(DisplayChannelClient *dcc,
+                                         MigrateDisplaySurfacesAtClientLossless *mig_surfaces)
+{
+    uint32_t i;
+
+    spice_debug(NULL);
+    for (i = 0; i < mig_surfaces->num_surfaces; i++) {
+        uint32_t surface_id = mig_surfaces->surfaces[i].id;
+
+        if (!restore_surface(dcc, surface_id))
+            return FALSE;
+    }
+    return TRUE;
+}
+
+static int restore_surfaces_lossy(DisplayChannelClient *dcc,
+                                  MigrateDisplaySurfacesAtClientLossy *mig_surfaces)
+{
+    uint32_t i;
+
+    spice_debug(NULL);
+    for (i = 0; i < mig_surfaces->num_surfaces; i++) {
+        uint32_t surface_id = mig_surfaces->surfaces[i].id;
+        SpiceMigrateDataRect *mig_lossy_rect;
+        SpiceRect lossy_rect;
+
+        if (!restore_surface(dcc, surface_id))
+            return FALSE;
+
+        mig_lossy_rect = &mig_surfaces->surfaces[i].lossy_rect;
+        lossy_rect.left = mig_lossy_rect->left;
+        lossy_rect.top = mig_lossy_rect->top;
+        lossy_rect.right = mig_lossy_rect->right;
+        lossy_rect.bottom = mig_lossy_rect->bottom;
+        region_init(&dcc->surface_client_lossy_region[surface_id]);
+        region_add(&dcc->surface_client_lossy_region[surface_id], &lossy_rect);
+    }
+    return TRUE;
+}
+
+int dcc_handle_migrate_data(DisplayChannelClient *dcc, uint32_t size, void *message)
+{
+    DisplayChannel *display = DCC_TO_DC(dcc);
+    int surfaces_restored = FALSE;
+    SpiceMigrateDataHeader *header = (SpiceMigrateDataHeader *)message;
+    SpiceMigrateDataDisplay *migrate_data = (SpiceMigrateDataDisplay *)(header + 1);
+    uint8_t *surfaces;
+    int i;
+
+    spice_return_val_if_fail(
+        size >= (sizeof(*migrate_data) + sizeof(SpiceMigrateDataHeader)), FALSE);
+    spice_return_val_if_fail(
+         migration_protocol_validate_header(header,
+             SPICE_MIGRATE_DATA_DISPLAY_MAGIC, SPICE_MIGRATE_DATA_DISPLAY_VERSION), FALSE);
+
+    /* size is set to -1 in order to keep the cache frozen until the original
+     * channel client that froze the cache on the src size receives the migrate
+     * data and unfreezes the cache by setting its size > 0 and by triggering
+     * pixmap_cache_reset */
+    dcc->pixmap_cache = pixmap_cache_get(RED_CHANNEL_CLIENT(dcc)->client,
+                                         migrate_data->pixmap_cache_id, -1);
+    spice_return_val_if_fail(dcc->pixmap_cache, FALSE);
+
+    pthread_mutex_lock(&dcc->pixmap_cache->lock);
+    for (i = 0; i < MAX_CACHE_CLIENTS; i++) {
+        dcc->pixmap_cache->sync[i] = MAX(dcc->pixmap_cache->sync[i],
+                                         migrate_data->pixmap_cache_clients[i]);
+    }
+    pthread_mutex_unlock(&dcc->pixmap_cache->lock);
+
+    if (migrate_data->pixmap_cache_freezer) {
+        /* activating the cache. The cache will start to be active after
+         * pixmap_cache_reset is called, when handling PIPE_ITEM_TYPE_PIXMAP_RESET */
+        dcc->pixmap_cache->size = migrate_data->pixmap_cache_size;
+        red_channel_client_pipe_add_type(RED_CHANNEL_CLIENT(dcc), PIPE_ITEM_TYPE_PIXMAP_RESET);
+    }
+
+    if (dcc_handle_migrate_glz_dictionary(dcc, migrate_data)) {
+        dcc->glz =
+            glz_encoder_create(dcc->common.id, dcc->glz_dict->dict, &dcc->glz_data.usr);
+    } else {
+        spice_critical("restoring global lz dictionary failed");
+    }
+
+    dcc->common.is_low_bandwidth = migrate_data->low_bandwidth_setting;
+
+    if (migrate_data->low_bandwidth_setting) {
+        red_channel_client_ack_set_client_window(RED_CHANNEL_CLIENT(dcc), WIDE_CLIENT_ACK_WINDOW);
+        if (dcc->jpeg_state == SPICE_WAN_COMPRESSION_AUTO) {
+            display->enable_jpeg = TRUE;
+        }
+        if (dcc->zlib_glz_state == SPICE_WAN_COMPRESSION_AUTO) {
+            display->enable_zlib_glz_wrap = TRUE;
+        }
+    }
+
+    surfaces = (uint8_t *)message + migrate_data->surfaces_at_client_ptr;
+    surfaces_restored = display->enable_jpeg ?
+        restore_surfaces_lossy(dcc, (MigrateDisplaySurfacesAtClientLossy *)surfaces) :
+        restore_surfaces_lossless(dcc, (MigrateDisplaySurfacesAtClientLossless*)surfaces);
+
+    spice_return_val_if_fail(surfaces_restored, FALSE);
+
+    red_channel_client_pipe_add_type(RED_CHANNEL_CLIENT(dcc), PIPE_ITEM_TYPE_INVAL_PALLET_CACHE);
+    /* enable sending messages */
+    red_channel_client_ack_zero_messages_window(RED_CHANNEL_CLIENT(dcc));
+    return TRUE;
+}
