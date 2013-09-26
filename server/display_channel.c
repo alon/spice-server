@@ -849,10 +849,10 @@ int display_channel_wait_for_migrate_data(DisplayChannel *display)
     RedChannelClient *rcc;
 
     spice_debug(NULL);
-    spice_assert(channel->clients_num == 1);
+    spice_warn_if_fail(channel->clients_num == 1);
 
     rcc = SPICE_CONTAINEROF(ring_get_head(&channel->clients), RedChannelClient, channel_link);
-    spice_assert(red_channel_client_waits_for_migrate_data(rcc));
+    spice_return_val_if_fail(red_channel_client_waits_for_migrate_data(rcc), FALSE);
 
     for (;;) {
         red_channel_client_receive(rcc);
