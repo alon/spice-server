@@ -484,9 +484,9 @@ static void dcc_detach_stream_gracefully(DisplayChannelClient *dcc,
                     stream_id, stream->current != NULL);
         rect_debug(&upgrade_area);
         if (update_area_limit) {
-            red_update_area_till(DCC_TO_DC(dcc), &upgrade_area, 0, update_area_limit);
+            display_channel_draw_till(DCC_TO_DC(dcc), &upgrade_area, 0, update_area_limit);
         } else {
-            red_update_area(DCC_TO_DC(dcc), &upgrade_area, 0);
+            display_channel_draw(DCC_TO_DC(dcc), &upgrade_area, 0);
         }
         dcc_add_surface_area_image(dcc, 0, &upgrade_area, NULL, FALSE);
     }
@@ -574,7 +574,7 @@ static void red_get_area(DisplayChannel *display, int surface_id, const SpiceRec
 
     surface = &display->surfaces[surface_id];
     if (update) {
-        red_update_area(display, area, surface_id);
+        display_channel_draw(display, area, surface_id);
     }
 
     canvas = surface->context.canvas;
@@ -654,7 +654,7 @@ static inline int red_handle_depends_on_target_surface(DisplayChannel *display, 
         Drawable *drawable;
         DependItem *depended_item = SPICE_CONTAINEROF(ring_item, DependItem, ring_item);
         drawable = depended_item->drawable;
-        red_update_area(display, &drawable->red_drawable->bbox, drawable->surface_id);
+        display_channel_draw(display, &drawable->red_drawable->bbox, drawable->surface_id);
     }
 
     return TRUE;
@@ -887,7 +887,7 @@ static void validate_area(DisplayChannel *display, const SpiceRect *area, uint32
     Renders drawables for updating the requested area, but only drawables that are older
     than 'last' (exclusive).
 */
-void red_update_area_till(DisplayChannel *display, const SpiceRect *area, int surface_id,
+void display_channel_draw_till(DisplayChannel *display, const SpiceRect *area, int surface_id,
                           Drawable *last)
 {
     RedSurface *surface;
@@ -954,10 +954,10 @@ void red_update_area_till(DisplayChannel *display, const SpiceRect *area, int su
         container = now->tree_item.base.container;
         current_remove_drawable(display, now);
         container_cleanup(container);
-        /* drawable_draw may call red_update_area for the surfaces 'now' depends on. Notice,
-           that it is valid to call red_update_area in this case and not red_update_area_till:
+        /* drawable_draw may call display_channel_draw for the surfaces 'now' depends on. Notice,
+           that it is valid to call display_channel_draw in this case and not display_channel_draw_till:
            It is impossible that there was newer item then 'last' in one of the surfaces
-           that red_update_area is called for, Otherwise, 'now' would have already been rendered.
+           that display_channel_draw is called for, Otherwise, 'now' would have already been rendered.
            See the call for red_handle_depends_on_target_surface in red_process_draw */
         drawable_draw(display, now);
         display_channel_drawable_unref(display, now);
@@ -965,7 +965,7 @@ void red_update_area_till(DisplayChannel *display, const SpiceRect *area, int su
     validate_area(display, area, surface_id);
 }
 
-void red_update_area(DisplayChannel *display, const SpiceRect *area, int surface_id)
+void display_channel_draw(DisplayChannel *display, const SpiceRect *area, int surface_id)
 {
     RedSurface *surface;
     Ring *ring;
@@ -1174,7 +1174,7 @@ static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *
                 spice_warning("Invalid surface in QXL_CMD_UPDATE");
                 break;
             }
-            red_update_area(worker->display_channel, &update.area, update.surface_id);
+            display_channel_draw(worker->display_channel, &update.area, update.surface_id);
             worker->qxl->st->qif->notify_update(worker->qxl, update.update_id);
             release_info_ext.group_id = ext_cmd.group_id;
             release_info_ext.info = update.release_info;
@@ -1812,7 +1812,7 @@ static void red_add_lossless_drawable_dependencies(RedChannelClient *rcc,
     } else {
         sync_rendered = FALSE;
         for (i = 0; i < num_deps; i++) {
-            red_update_area_till(display, deps_areas[i],
+            display_channel_draw_till(display, deps_areas[i],
                                  deps_surfaces_ids[i], item);
         }
     }
@@ -4434,7 +4434,7 @@ void display_channel_update(DisplayChannel *display,
     spice_return_if_fail(validate_surface(display, surface_id));
 
     red_get_rect_ptr(&rect, area);
-    red_update_area(display, &rect, surface_id);
+    display_channel_draw(display, &rect, surface_id);
 
     surface = &display->surfaces[surface_id];
     if (!*qxl_dirty_rects) {
