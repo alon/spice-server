@@ -20,6 +20,9 @@
 /* Each drawable can refer to at most 3 images: src, brush and mask */
 #define MAX_DRAWABLE_PIXMAP_CACHE_ITEMS 3
 
+#define WIDE_CLIENT_ACK_WINDOW 40
+#define NARROW_CLIENT_ACK_WINDOW 20
+
 typedef struct WaitForChannels {
     SpiceMsgWaitForChannels header;
     SpiceWaitForChannel buf[MAX_CACHE_CLIENTS];
@@ -141,6 +144,8 @@ void                       dcc_start                                 (DisplayCha
 int                        dcc_handle_message                        (RedChannelClient *rcc,
                                                                       uint32_t size,
                                                                       uint16_t type, void *msg);
+int                        dcc_handle_migrate_data                   (DisplayChannelClient *dcc,
+                                                                      uint32_t size, void *message);
 void                       dcc_push_monitors_config                  (DisplayChannelClient *dcc);
 void                       dcc_destroy_surface                       (DisplayChannelClient *dcc,
                                                                       uint32_t surface_id);
