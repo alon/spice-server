@@ -128,9 +128,6 @@ typedef struct BitmapData {
     SpiceRect lossy_rect;
 } BitmapData;
 
-static void red_update_area(DisplayChannel *display, const SpiceRect *area, int surface_id);
-static void red_update_area_till(DisplayChannel *display, const SpiceRect *area, int surface_id,
-                                 Drawable *last);
 static inline void display_begin_send_message(RedChannelClient *rcc);
 static void red_create_surface(DisplayChannel *display, uint32_t surface_id, uint32_t width,
                                uint32_t height, int32_t stride, uint32_t format,
@@ -220,24 +217,6 @@ static void common_release_recv_buf(RedChannelClient *rcc, uint16_t type, uint32
     }
 }
 
-
-static void drawable_free(DisplayChannel *display, Drawable *drawable)
-{
-    ((_Drawable *)drawable)->u.next = display->free_drawables;
-    display->free_drawables = (_Drawable *)drawable;
-}
-
-static void drawables_init(DisplayChannel *display)
-{
-    int i;
-
-    display->free_drawables = NULL;
-    for (i = 0; i < NUM_DRAWABLES; i++) {
-        drawable_free(display, &display->drawables[i].u.drawable);
-    }
-}
-
-
 void red_drawable_unref(RedWorker *worker, RedDrawable *red_drawable,
                         uint32_t group_id)
 {
@@ -252,69 +231,6 @@ void red_drawable_unref(RedWorker *worker, RedDrawable *red_drawable,
     worker->qxl->st->qif->release_resource(worker->qxl, release_info_ext);
     red_put_drawable(red_drawable);
     free(red_drawable);
-}
-
-static void remove_depended_item(DependItem *item)
-{
-    spice_assert(item->drawable);
-    spice_assert(ring_item_is_linked(&item->ring_item));
-    item->drawable = NULL;
-    ring_remove(&item->ring_item);
-}
-
-static void drawable_unref_surface_deps(DisplayChannel *display, Drawable *drawable)
-{
-    int x;
-    int surface_id;
-
-    for (x = 0; x < 3; ++x) {
-        surface_id = drawable->surface_deps[x];
-        if (surface_id == -1) {
-            continue;
-        }
-        display_channel_surface_unref(display, surface_id);
-    }
-}
-
-static void drawable_remove_dependencies(DisplayChannel *display, Drawable *drawable)
-{
-    int x;
-    int surface_id;
-
-    for (x = 0; x < 3; ++x) {
-        surface_id = drawable->surface_deps[x];
-        if (surface_id != -1 && drawable->depend_items[x].drawable) {
-            remove_depended_item(&drawable->depend_items[x]);
-        }
-    }
-}
-
-void display_channel_drawable_unref(DisplayChannel *display, Drawable *drawable)
-{
-    RingItem *item, *next;
-
-    if (--drawable->refs)
-        return;
-
-    spice_return_if_fail(!drawable->tree_item.shadow);
-    spice_return_if_fail(ring_is_empty(&drawable->pipes));
-
-    if (drawable->stream) {
-        detach_stream(display, drawable->stream, TRUE);
-    }
-    region_destroy(&drawable->tree_item.base.rgn);
-
-    drawable_remove_dependencies(display, drawable);
-    drawable_unref_surface_deps(display, drawable);
-    display_channel_surface_unref(display, drawable->surface_id);
-
-    RING_FOREACH_SAFE(item, next, &drawable->glz_ring) {
-        SPICE_CONTAINEROF(item, RedGlzDrawable, drawable_link)->drawable = NULL;
-        ring_remove(item);
-    }
-    red_drawable_unref(COMMON_CHANNEL(display)->worker, drawable->red_drawable, drawable->group_id);
-    drawable_free(display, drawable);
-    display->drawable_count--;
 }
 
 static void display_stream_trace_add_drawable(DisplayChannel *display, Drawable *item)
@@ -334,25 +250,6 @@ static void display_stream_trace_add_drawable(DisplayChannel *display, Drawable 
     trace->width = src_area->right - src_area->left;
     trace->height = src_area->bottom - src_area->top;
     trace->dest_area = item->red_drawable->bbox;
-}
-
-static void surface_flush(DisplayChannel *display, int surface_id, SpiceRect *rect)
-{
-    red_update_area(display, rect, surface_id);
-}
-
-static void red_flush_source_surfaces(DisplayChannel *display, Drawable *drawable)
-{
-    int x;
-    int surface_id;
-
-    for (x = 0; x < 3; ++x) {
-        surface_id = drawable->surface_deps[x];
-        if (surface_id != -1 && drawable->depend_items[x].drawable) {
-            remove_depended_item(&drawable->depend_items[x]);
-            surface_flush(display, surface_id, &drawable->red_drawable->surfaces_rects[x]);
-        }
-    }
 }
 
 void current_remove_drawable(DisplayChannel *display, Drawable *item)
@@ -757,7 +654,7 @@ static inline int red_handle_depends_on_target_surface(DisplayChannel *display, 
         Drawable *drawable;
         DependItem *depended_item = SPICE_CONTAINEROF(ring_item, DependItem, ring_item);
         drawable = depended_item->drawable;
-        surface_flush(display, drawable->surface_id, &drawable->red_drawable->bbox);
+        red_update_area(display, &drawable->red_drawable->bbox, drawable->surface_id);
     }
 
     return TRUE;
@@ -964,146 +861,6 @@ static SpiceCanvas *image_surfaces_get(SpiceImageSurfaces *surfaces, uint32_t su
     return display->surfaces[surface_id].context.canvas;
 }
 
-void drawable_draw(DisplayChannel *display, Drawable *drawable)
-{
-    RedSurface *surface;
-    SpiceCanvas *canvas;
-    SpiceClip clip = drawable->red_drawable->clip;
-
-    red_flush_source_surfaces(display, drawable);
-
-    surface = &display->surfaces[drawable->surface_id];
-    canvas = surface->context.canvas;
-    spice_return_if_fail(canvas);
-
-    image_cache_aging(&display->image_cache);
-
-    region_add(&surface->draw_dirty_region, &drawable->red_drawable->bbox);
-
-    switch (drawable->red_drawable->type) {
-    case QXL_DRAW_FILL: {
-        SpiceFill fill = drawable->red_drawable->u.fill;
-        SpiceImage img1, img2;
-        image_cache_localize_brush(&display->image_cache, &fill.brush, &img1);
-        image_cache_localize_mask(&display->image_cache, &fill.mask, &img2);
-        canvas->ops->draw_fill(canvas, &drawable->red_drawable->bbox,
-                               &clip, &fill);
-        break;
-    }
-    case QXL_DRAW_OPAQUE: {
-        SpiceOpaque opaque = drawable->red_drawable->u.opaque;
-        SpiceImage img1, img2, img3;
-        image_cache_localize_brush(&display->image_cache, &opaque.brush, &img1);
-        image_cache_localize(&display->image_cache, &opaque.src_bitmap, &img2, drawable);
-        image_cache_localize_mask(&display->image_cache, &opaque.mask, &img3);
-        canvas->ops->draw_opaque(canvas, &drawable->red_drawable->bbox, &clip, &opaque);
-        break;
-    }
-    case QXL_DRAW_COPY: {
-        SpiceCopy copy = drawable->red_drawable->u.copy;
-        SpiceImage img1, img2;
-        image_cache_localize(&display->image_cache, &copy.src_bitmap, &img1, drawable);
-        image_cache_localize_mask(&display->image_cache, &copy.mask, &img2);
-        canvas->ops->draw_copy(canvas, &drawable->red_drawable->bbox,
-                               &clip, &copy);
-        break;
-    }
-    case QXL_DRAW_TRANSPARENT: {
-        SpiceTransparent transparent = drawable->red_drawable->u.transparent;
-        SpiceImage img1;
-        image_cache_localize(&display->image_cache, &transparent.src_bitmap, &img1, drawable);
-        canvas->ops->draw_transparent(canvas,
-                                      &drawable->red_drawable->bbox, &clip, &transparent);
-        break;
-    }
-    case QXL_DRAW_ALPHA_BLEND: {
-        SpiceAlphaBlend alpha_blend = drawable->red_drawable->u.alpha_blend;
-        SpiceImage img1;
-        image_cache_localize(&display->image_cache, &alpha_blend.src_bitmap, &img1, drawable);
-        canvas->ops->draw_alpha_blend(canvas,
-                                      &drawable->red_drawable->bbox, &clip, &alpha_blend);
-        break;
-    }
-    case QXL_COPY_BITS: {
-        canvas->ops->copy_bits(canvas, &drawable->red_drawable->bbox,
-                               &clip, &drawable->red_drawable->u.copy_bits.src_pos);
-        break;
-    }
-    case QXL_DRAW_BLEND: {
-        SpiceBlend blend = drawable->red_drawable->u.blend;
-        SpiceImage img1, img2;
-        image_cache_localize(&display->image_cache, &blend.src_bitmap, &img1, drawable);
-        image_cache_localize_mask(&display->image_cache, &blend.mask, &img2);
-        canvas->ops->draw_blend(canvas, &drawable->red_drawable->bbox,
-                                &clip, &blend);
-        break;
-    }
-    case QXL_DRAW_BLACKNESS: {
-        SpiceBlackness blackness = drawable->red_drawable->u.blackness;
-        SpiceImage img1;
-        image_cache_localize_mask(&display->image_cache, &blackness.mask, &img1);
-        canvas->ops->draw_blackness(canvas,
-                                    &drawable->red_drawable->bbox, &clip, &blackness);
-        break;
-    }
-    case QXL_DRAW_WHITENESS: {
-        SpiceWhiteness whiteness = drawable->red_drawable->u.whiteness;
-        SpiceImage img1;
-        image_cache_localize_mask(&display->image_cache, &whiteness.mask, &img1);
-        canvas->ops->draw_whiteness(canvas,
-                                    &drawable->red_drawable->bbox, &clip, &whiteness);
-        break;
-    }
-    case QXL_DRAW_INVERS: {
-        SpiceInvers invers = drawable->red_drawable->u.invers;
-        SpiceImage img1;
-        image_cache_localize_mask(&display->image_cache, &invers.mask, &img1);
-        canvas->ops->draw_invers(canvas,
-                                 &drawable->red_drawable->bbox, &clip, &invers);
-        break;
-    }
-    case QXL_DRAW_ROP3: {
-        SpiceRop3 rop3 = drawable->red_drawable->u.rop3;
-        SpiceImage img1, img2, img3;
-        image_cache_localize_brush(&display->image_cache, &rop3.brush, &img1);
-        image_cache_localize(&display->image_cache, &rop3.src_bitmap, &img2, drawable);
-        image_cache_localize_mask(&display->image_cache, &rop3.mask, &img3);
-        canvas->ops->draw_rop3(canvas, &drawable->red_drawable->bbox,
-                               &clip, &rop3);
-        break;
-    }
-    case QXL_DRAW_COMPOSITE: {
-        SpiceComposite composite = drawable->red_drawable->u.composite;
-        SpiceImage src, mask;
-        image_cache_localize(&display->image_cache, &composite.src_bitmap, &src, drawable);
-        if (composite.mask_bitmap)
-            image_cache_localize(&display->image_cache, &composite.mask_bitmap, &mask, drawable);
-        canvas->ops->draw_composite(canvas, &drawable->red_drawable->bbox,
-                                    &clip, &composite);
-        break;
-    }
-    case QXL_DRAW_STROKE: {
-        SpiceStroke stroke = drawable->red_drawable->u.stroke;
-        SpiceImage img1;
-        image_cache_localize_brush(&display->image_cache, &stroke.brush, &img1);
-        canvas->ops->draw_stroke(canvas,
-                                 &drawable->red_drawable->bbox, &clip, &stroke);
-        break;
-    }
-    case QXL_DRAW_TEXT: {
-        SpiceText text = drawable->red_drawable->u.text;
-        SpiceImage img1, img2;
-        image_cache_localize_brush(&display->image_cache, &text.fore_brush, &img1);
-        image_cache_localize_brush(&display->image_cache, &text.back_brush, &img2);
-        canvas->ops->draw_text(canvas, &drawable->red_drawable->bbox,
-                               &clip, &text);
-        break;
-    }
-    default:
-        spice_warning("invalid type");
-    }
-}
-
 static void validate_area(DisplayChannel *display, const SpiceRect *area, uint32_t surface_id)
 {
     RedSurface *surface;
@@ -1130,8 +887,8 @@ static void validate_area(DisplayChannel *display, const SpiceRect *area, uint32
     Renders drawables for updating the requested area, but only drawables that are older
     than 'last' (exclusive).
 */
-static void red_update_area_till(DisplayChannel *display, const SpiceRect *area, int surface_id,
-                                 Drawable *last)
+void red_update_area_till(DisplayChannel *display, const SpiceRect *area, int surface_id,
+                          Drawable *last)
 {
     RedSurface *surface;
     Drawable *surface_last = NULL;
@@ -1208,7 +965,7 @@ static void red_update_area_till(DisplayChannel *display, const SpiceRect *area,
     validate_area(display, area, surface_id);
 }
 
-static void red_update_area(DisplayChannel *display, const SpiceRect *area, int surface_id)
+void red_update_area(DisplayChannel *display, const SpiceRect *area, int surface_id)
 {
     RedSurface *surface;
     Ring *ring;
