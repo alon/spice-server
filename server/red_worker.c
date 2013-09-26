@@ -76,15 +76,10 @@
 
 #define MAX_EVENT_SOURCES 20
 
-#define MAX_LZ_ENCODERS MAX_CACHE_CLIENTS
-
 #define MAX_PIPE_SIZE 50
 
 #define WIDE_CLIENT_ACK_WINDOW 40
 #define NARROW_CLIENT_ACK_WINDOW 20
-
-pthread_mutex_t glz_dictionary_list_lock = PTHREAD_MUTEX_INITIALIZER;
-Ring glz_dictionary_list = {&glz_dictionary_list, &glz_dictionary_list};
 
 typedef struct RedWorker {
     pthread_t thread;
@@ -141,7 +136,6 @@ static void red_update_area(DisplayChannel *display, const SpiceRect *area, int 
 static void red_update_area_till(DisplayChannel *display, const SpiceRect *area, int surface_id,
                                  Drawable *last);
 static inline void display_begin_send_message(RedChannelClient *rcc);
-static void dcc_release_glz(DisplayChannelClient *dcc);
 static int red_display_free_some_independent_glz_drawables(DisplayChannelClient *dcc);
 static void display_channel_client_release_item_before_push(DisplayChannelClient *dcc,
                                                             PipeItem *item);
@@ -4383,167 +4377,18 @@ static inline void flush_all_qxl_commands(RedWorker *worker)
     flush_cursor_commands(worker);
 }
 
-static GlzSharedDictionary *_red_find_glz_dictionary(RedClient *client, uint8_t dict_id)
+static int dcc_handle_migrate_glz_dictionary(DisplayChannelClient *dcc,
+                                             SpiceMigrateDataDisplay *migrate)
 {
-    RingItem *now;
-    GlzSharedDictionary *ret = NULL;
+    spice_return_val_if_fail(!dcc->glz_dict, FALSE);
 
-    now = &glz_dictionary_list;
-    while ((now = ring_next(&glz_dictionary_list, now))) {
-        GlzSharedDictionary *dict = (GlzSharedDictionary *)now;
-        if ((dict->client == client) && (dict->id == dict_id)) {
-            ret = dict;
-            break;
-        }
-    }
-
-    return ret;
-}
-
-static GlzSharedDictionary *_red_create_glz_dictionary(RedClient *client, uint8_t id,
-                                                       GlzEncDictContext *opaque_dict)
-{
-    GlzSharedDictionary *shared_dict = spice_new0(GlzSharedDictionary, 1);
-    shared_dict->dict = opaque_dict;
-    shared_dict->id = id;
-    shared_dict->refs = 1;
-    shared_dict->migrate_freeze = FALSE;
-    shared_dict->client = client;
-    ring_item_init(&shared_dict->base);
-    pthread_rwlock_init(&shared_dict->encode_lock, NULL);
-    return shared_dict;
-}
-
-static GlzSharedDictionary *red_create_glz_dictionary(DisplayChannelClient *dcc,
-                                                      uint8_t id, int window_size)
-{
-    GlzEncDictContext *glz_dict = glz_enc_dictionary_create(window_size,
-                                                            MAX_LZ_ENCODERS,
-                                                            &dcc->glz_data.usr);
-#ifdef COMPRESS_DEBUG
-    spice_info("Lz Window %d Size=%d", id, window_size);
-#endif
-    if (!glz_dict) {
-        spice_critical("failed creating lz dictionary");
-        return NULL;
-    }
-    return _red_create_glz_dictionary(RED_CHANNEL_CLIENT(dcc)->client, id, glz_dict);
-}
-
-static GlzSharedDictionary *red_create_restored_glz_dictionary(DisplayChannelClient *dcc,
-                                                               uint8_t id,
-                                                               GlzEncDictRestoreData *restore_data)
-{
-    GlzEncDictContext *glz_dict = glz_enc_dictionary_restore(restore_data,
-                                                             &dcc->glz_data.usr);
-    if (!glz_dict) {
-        spice_critical("failed creating lz dictionary");
-        return NULL;
-    }
-    return _red_create_glz_dictionary(RED_CHANNEL_CLIENT(dcc)->client, id, glz_dict);
-}
-
-static GlzSharedDictionary *red_get_glz_dictionary(DisplayChannelClient *dcc,
-                                                   uint8_t id, int window_size)
-{
-    GlzSharedDictionary *shared_dict = NULL;
-
-    pthread_mutex_lock(&glz_dictionary_list_lock);
-
-    shared_dict = _red_find_glz_dictionary(RED_CHANNEL_CLIENT(dcc)->client, id);
-
-    if (!shared_dict) {
-        shared_dict = red_create_glz_dictionary(dcc, id, window_size);
-        ring_add(&glz_dictionary_list, &shared_dict->base);
-    } else {
-        shared_dict->refs++;
-    }
-    pthread_mutex_unlock(&glz_dictionary_list_lock);
-    return shared_dict;
-}
-
-static GlzSharedDictionary *red_restore_glz_dictionary(DisplayChannelClient *dcc,
-                                                       uint8_t id,
-                                                       GlzEncDictRestoreData *restore_data)
-{
-    GlzSharedDictionary *shared_dict = NULL;
-
-    pthread_mutex_lock(&glz_dictionary_list_lock);
-
-    shared_dict = _red_find_glz_dictionary(RED_CHANNEL_CLIENT(dcc)->client, id);
-
-    if (!shared_dict) {
-        shared_dict = red_create_restored_glz_dictionary(dcc, id, restore_data);
-        ring_add(&glz_dictionary_list, &shared_dict->base);
-    } else {
-        shared_dict->refs++;
-    }
-    pthread_mutex_unlock(&glz_dictionary_list_lock);
-    return shared_dict;
-}
-
-/* destroy encoder, and dictionary if no one uses it*/
-static void dcc_release_glz(DisplayChannelClient *dcc)
-{
-    GlzSharedDictionary *shared_dict;
-
-    dcc_free_glz_drawables(dcc);
-
-    glz_encoder_destroy(dcc->glz);
-    dcc->glz = NULL;
-
-    if (!(shared_dict = dcc->glz_dict)) {
-        return;
-    }
-
-    dcc->glz_dict = NULL;
-    pthread_mutex_lock(&glz_dictionary_list_lock);
-    if (--shared_dict->refs) {
-        pthread_mutex_unlock(&glz_dictionary_list_lock);
-        return;
-    }
-    ring_remove(&shared_dict->base);
-    pthread_mutex_unlock(&glz_dictionary_list_lock);
-    glz_enc_dictionary_destroy(shared_dict->dict, &dcc->glz_data.usr);
-    free(shared_dict);
-}
-
-static int display_channel_init_cache(DisplayChannelClient *dcc, SpiceMsgcDisplayInit *init_info)
-{
-    spice_assert(!dcc->pixmap_cache);
-    return !!(dcc->pixmap_cache = pixmap_cache_get(RED_CHANNEL_CLIENT(dcc)->client,
-                                                   init_info->pixmap_cache_id,
-                                                   init_info->pixmap_cache_size));
-}
-
-static int display_channel_init_glz_dictionary(DisplayChannelClient *dcc,
-                                               SpiceMsgcDisplayInit *init_info)
-{
-    spice_assert(!dcc->glz_dict);
     ring_init(&dcc->glz_drawables);
     ring_init(&dcc->glz_drawables_inst_to_free);
     pthread_mutex_init(&dcc->glz_drawables_inst_to_free_lock, NULL);
-    return !!(dcc->glz_dict = red_get_glz_dictionary(dcc,
-                                                     init_info->glz_dictionary_id,
-                                                     init_info->glz_dictionary_window_size));
-}
-
-static int display_channel_init(DisplayChannelClient *dcc, SpiceMsgcDisplayInit *init_info)
-{
-    return (display_channel_init_cache(dcc, init_info) &&
-            display_channel_init_glz_dictionary(dcc, init_info));
-}
-
-static int display_channel_handle_migrate_glz_dictionary(DisplayChannelClient *dcc,
-                                                         SpiceMigrateDataDisplay *migrate_info)
-{
-    spice_assert(!dcc->glz_dict);
-    ring_init(&dcc->glz_drawables);
-    ring_init(&dcc->glz_drawables_inst_to_free);
-    pthread_mutex_init(&dcc->glz_drawables_inst_to_free_lock, NULL);
-    return !!(dcc->glz_dict = red_restore_glz_dictionary(dcc,
-                                                         migrate_info->glz_dict_id,
-                                                         &migrate_info->glz_dict_data));
+    dcc->glz_dict = dcc_restore_glz_dictionary(dcc,
+                                               migrate->glz_dict_id,
+                                               &migrate->glz_dict_data);
+    return dcc->glz_dict != NULL;
 }
 
 static int display_channel_handle_migrate_mark(RedChannelClient *rcc)
@@ -4667,7 +4512,7 @@ static int display_channel_handle_migrate_data(RedChannelClient *rcc, uint32_t s
                                          PIPE_ITEM_TYPE_PIXMAP_RESET);
     }
 
-    if (display_channel_handle_migrate_glz_dictionary(dcc, migrate_data)) {
+    if (dcc_handle_migrate_glz_dictionary(dcc, migrate_data)) {
         dcc->glz = glz_encoder_create(dcc->common.id,
                                       dcc->glz_dict->dict, &dcc->glz_data.usr);
         if (!dcc->glz) {
@@ -4705,58 +4550,6 @@ static int display_channel_handle_migrate_data(RedChannelClient *rcc, uint32_t s
     /* enable sending messages */
     red_channel_client_ack_zero_messages_window(rcc);
     return TRUE;
-}
-
-static int display_channel_handle_stream_report(DisplayChannelClient *dcc,
-                                                SpiceMsgcDisplayStreamReport *stream_report)
-{
-    StreamAgent *stream_agent;
-
-    if (stream_report->stream_id >= NUM_STREAMS) {
-        spice_warning("stream_report: invalid stream id %u", stream_report->stream_id);
-        return FALSE;
-    }
-    stream_agent = &dcc->stream_agents[stream_report->stream_id];
-    if (!stream_agent->mjpeg_encoder) {
-        spice_info("stream_report: no encoder for stream id %u."
-                    "Probably the stream has been destroyed", stream_report->stream_id);
-        return TRUE;
-    }
-
-    if (stream_report->unique_id != stream_agent->report_id) {
-        spice_warning("local reoprt-id (%u) != msg report-id (%u)",
-                      stream_agent->report_id, stream_report->unique_id);
-        return TRUE;
-    }
-    mjpeg_encoder_client_stream_report(stream_agent->mjpeg_encoder,
-                                       stream_report->num_frames,
-                                       stream_report->num_drops,
-                                       stream_report->start_frame_mm_time,
-                                       stream_report->end_frame_mm_time,
-                                       stream_report->last_frame_delay,
-                                       stream_report->audio_delay);
-    return TRUE;
-}
-
-static int display_channel_handle_message(RedChannelClient *rcc, uint32_t size, uint16_t type,
-                                          void *message)
-{
-    DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
-
-    switch (type) {
-    case SPICE_MSGC_DISPLAY_INIT:
-        if (!dcc->expect_init) {
-            spice_warning("unexpected SPICE_MSGC_DISPLAY_INIT");
-            return FALSE;
-        }
-        dcc->expect_init = FALSE;
-        return display_channel_init(dcc, (SpiceMsgcDisplayInit *)message);
-    case SPICE_MSGC_DISPLAY_STREAM_REPORT:
-        return display_channel_handle_stream_report(dcc,
-                                                    (SpiceMsgcDisplayStreamReport *)message);
-    default:
-        return red_channel_client_handle_message(rcc, size, type, message);
-    }
 }
 
 static int common_channel_config_socket(RedChannelClient *rcc)
@@ -5185,7 +4978,7 @@ static void display_channel_create(RedWorker *worker, int migrate, uint32_t n_su
             worker, sizeof(*display_channel), "display_channel",
             SPICE_CHANNEL_DISPLAY,
             SPICE_MIGRATE_NEED_FLUSH | SPICE_MIGRATE_NEED_DATA_TRANSFER,
-            &cbs, display_channel_handle_message))) {
+            &cbs, dcc_handle_message))) {
         spice_warning("failed to create display channel");
         return;
     }

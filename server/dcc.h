@@ -138,6 +138,9 @@ DisplayChannelClient*      dcc_new                                   (DisplayCha
                                                                       spice_wan_compression_t jpeg_state,
                                                                       spice_wan_compression_t zlib_glz_state);
 void                       dcc_start                                 (DisplayChannelClient *dcc);
+int                        dcc_handle_message                        (RedChannelClient *rcc,
+                                                                      uint32_t size,
+                                                                      uint16_t type, void *msg);
 void                       dcc_push_monitors_config                  (DisplayChannelClient *dcc);
 void                       dcc_destroy_surface                       (DisplayChannelClient *dcc,
                                                                       uint32_t surface_id);
