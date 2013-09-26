@@ -134,10 +134,6 @@ static void red_update_area_till(DisplayChannel *display, const SpiceRect *area,
                                  Drawable *last);
 static inline void display_begin_send_message(RedChannelClient *rcc);
 static int red_display_free_some_independent_glz_drawables(DisplayChannelClient *dcc);
-static void display_channel_client_release_item_before_push(DisplayChannelClient *dcc,
-                                                            PipeItem *item);
-static void display_channel_client_release_item_after_push(DisplayChannelClient *dcc,
-                                                           PipeItem *item);
 static void red_create_surface(DisplayChannel *display, uint32_t surface_id, uint32_t width,
                                uint32_t height, int32_t stride, uint32_t format,
                                void *line_0, int data_is_valid, int send_client);
@@ -201,23 +197,6 @@ void red_pipes_remove_drawable(Drawable *drawable)
                                                        &dpi->dpi_pipe_item);
         }
     }
-}
-
-static void release_image_item(ImageItem *item)
-{
-    if (!--item->refs) {
-        free(item);
-    }
-}
-
-static void upgrade_item_unref(DisplayChannel *display, UpgradeItem *item)
-{
-    if (--item->refs)
-        return;
-
-    display_channel_drawable_unref(display, item->drawable);
-    free(item->rects);
-    free(item);
 }
 
 static uint8_t *common_alloc_recv_buf(RedChannelClient *rcc, uint16_t type, uint32_t size)
@@ -4004,7 +3983,7 @@ static void red_marshall_stream_activate_report(RedChannelClient *rcc,
     spice_marshall_msg_display_stream_activate_report(base_marshaller, &msg);
 }
 
-static void display_channel_send_item(RedChannelClient *rcc, PipeItem *pipe_item)
+static void send_item(RedChannelClient *rcc, PipeItem *pipe_item)
 {
     SpiceMarshaller *m = red_channel_client_get_marshaller(rcc);
     DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
@@ -4082,7 +4061,7 @@ static void display_channel_send_item(RedChannelClient *rcc, PipeItem *pipe_item
         spice_error("invalid pipe item type");
     }
 
-    display_channel_client_release_item_before_push(dcc, pipe_item);
+    dcc_release_item(dcc, pipe_item, FALSE);
 
     // a message is pending
     if (red_channel_client_send_message_pending(rcc)) {
@@ -4100,7 +4079,7 @@ static inline void red_push(RedWorker *worker)
     }
 }
 
-static void display_channel_client_on_disconnect(RedChannelClient *rcc)
+static void on_disconnect(RedChannelClient *rcc)
 {
     DisplayChannel *display;
     DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
@@ -4374,7 +4353,7 @@ static inline void flush_all_qxl_commands(RedWorker *worker)
     flush_cursor_commands(worker);
 }
 
-static int display_channel_handle_migrate_mark(RedChannelClient *rcc)
+static int handle_migrate_flush_mark(RedChannelClient *rcc)
 {
     DisplayChannel *display_channel = SPICE_CONTAINEROF(rcc->channel, DisplayChannel, common.base);
     RedChannel *channel = RED_CHANNEL(display_channel);
@@ -4659,7 +4638,7 @@ RedChannel *red_worker_new_channel(RedWorker *worker, int size,
     return channel;
 }
 
-static void display_channel_hold_pipe_item(RedChannelClient *rcc, PipeItem *item)
+static void hold_item(RedChannelClient *rcc, PipeItem *item)
 {
     spice_assert(item);
     switch (item->type) {
@@ -4680,117 +4659,13 @@ static void display_channel_hold_pipe_item(RedChannelClient *rcc, PipeItem *item
     }
 }
 
-static void display_channel_client_release_item_after_push(DisplayChannelClient *dcc,
-                                                           PipeItem *item)
-{
-    DisplayChannel *display = DCC_TO_DC(dcc);
-
-    switch (item->type) {
-    case PIPE_ITEM_TYPE_DRAW:
-        drawable_pipe_item_unref(SPICE_CONTAINEROF(item, DrawablePipeItem, dpi_pipe_item));
-        break;
-    case PIPE_ITEM_TYPE_STREAM_CLIP:
-        stream_clip_item_unref(dcc, (StreamClipItem *)item);
-        break;
-    case PIPE_ITEM_TYPE_UPGRADE:
-        upgrade_item_unref(display, (UpgradeItem *)item);
-        break;
-    case PIPE_ITEM_TYPE_IMAGE:
-        release_image_item((ImageItem *)item);
-        break;
-    case PIPE_ITEM_TYPE_VERB:
-        free(item);
-        break;
-    case PIPE_ITEM_TYPE_MONITORS_CONFIG: {
-        MonitorsConfigItem *monconf_item = SPICE_CONTAINEROF(item,
-                                                             MonitorsConfigItem, pipe_item);
-        monitors_config_unref(monconf_item->monitors_config);
-        free(item);
-        break;
-    }
-    default:
-        spice_critical("invalid item type");
-    }
-}
-
-// TODO: share code between before/after_push since most of the items need the same
-// release
-static void display_channel_client_release_item_before_push(DisplayChannelClient *dcc,
-                                                            PipeItem *item)
-{
-    DisplayChannel *display = DCC_TO_DC(dcc);
-
-    switch (item->type) {
-    case PIPE_ITEM_TYPE_DRAW: {
-        DrawablePipeItem *dpi = SPICE_CONTAINEROF(item, DrawablePipeItem, dpi_pipe_item);
-        ring_remove(&dpi->base);
-        drawable_pipe_item_unref(dpi);
-        break;
-    }
-    case PIPE_ITEM_TYPE_STREAM_CREATE: {
-        StreamAgent *agent = SPICE_CONTAINEROF(item, StreamAgent, create_item);
-        stream_agent_unref(display, agent);
-        break;
-    }
-    case PIPE_ITEM_TYPE_STREAM_CLIP:
-        stream_clip_item_unref(dcc, (StreamClipItem *)item);
-        break;
-    case PIPE_ITEM_TYPE_STREAM_DESTROY: {
-        StreamAgent *agent = SPICE_CONTAINEROF(item, StreamAgent, destroy_item);
-        stream_agent_unref(display, agent);
-        break;
-    }
-    case PIPE_ITEM_TYPE_UPGRADE:
-        upgrade_item_unref(display, (UpgradeItem *)item);
-        break;
-    case PIPE_ITEM_TYPE_IMAGE:
-        release_image_item((ImageItem *)item);
-        break;
-    case PIPE_ITEM_TYPE_CREATE_SURFACE: {
-        SurfaceCreateItem *surface_create = SPICE_CONTAINEROF(item, SurfaceCreateItem,
-                                                              pipe_item);
-        free(surface_create);
-        break;
-    }
-    case PIPE_ITEM_TYPE_DESTROY_SURFACE: {
-        SurfaceDestroyItem *surface_destroy = SPICE_CONTAINEROF(item, SurfaceDestroyItem,
-                                                                pipe_item);
-        free(surface_destroy);
-        break;
-    }
-    case PIPE_ITEM_TYPE_MONITORS_CONFIG: {
-        MonitorsConfigItem *monconf_item = SPICE_CONTAINEROF(item,
-                                                             MonitorsConfigItem, pipe_item);
-        monitors_config_unref(monconf_item->monitors_config);
-        free(item);
-        break;
-    }
-    case PIPE_ITEM_TYPE_VERB:
-    case PIPE_ITEM_TYPE_MIGRATE_DATA:
-    case PIPE_ITEM_TYPE_PIXMAP_SYNC:
-    case PIPE_ITEM_TYPE_PIXMAP_RESET:
-    case PIPE_ITEM_TYPE_INVAL_PALLET_CACHE:
-    case PIPE_ITEM_TYPE_STREAM_ACTIVATE_REPORT:
-        free(item);
-        break;
-    default:
-        spice_critical("invalid item type");
-    }
-}
-
-static void display_channel_release_item(RedChannelClient *rcc, PipeItem *item, int item_pushed)
+static void release_item(RedChannelClient *rcc, PipeItem *item, int item_pushed)
 {
     DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
-
-    spice_assert(item);
-    if (item_pushed) {
-        display_channel_client_release_item_after_push(dcc, item);
-    } else {
-        spice_debug("not pushed (%d)", item->type);
-        display_channel_client_release_item_before_push(dcc, item);
-    }
-
     RedWorker *worker = DCC_TO_WORKER(dcc);
+
+    spice_return_if_fail(item != NULL);
+    dcc_release_item(dcc, item, item_pushed);
     worker->timeout = 0;
 }
 
@@ -4807,11 +4682,11 @@ static void display_channel_create(RedWorker *worker, int migrate, uint32_t n_su
 {
     DisplayChannel *display_channel;
     ChannelCbs cbs = {
-        .on_disconnect = display_channel_client_on_disconnect,
-        .send_item = display_channel_send_item,
-        .hold_item = display_channel_hold_pipe_item,
-        .release_item = display_channel_release_item,
-        .handle_migrate_flush_mark = display_channel_handle_migrate_mark,
+        .on_disconnect = on_disconnect,
+        .send_item = send_item,
+        .hold_item = hold_item,
+        .release_item = release_item,
+        .handle_migrate_flush_mark = handle_migrate_flush_mark,
         .handle_migrate_data = handle_migrate_data,
         .handle_migrate_data_get_serial = handle_migrate_data_get_serial
     };

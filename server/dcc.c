@@ -1263,3 +1263,126 @@ int dcc_handle_migrate_data(DisplayChannelClient *dcc, uint32_t size, void *mess
     red_channel_client_ack_zero_messages_window(RED_CHANNEL_CLIENT(dcc));
     return TRUE;
 }
+
+static void image_item_unref(ImageItem *item)
+{
+    if (--item->refs)
+        return;
+
+    free(item);
+}
+
+static void upgrade_item_unref(DisplayChannel *display, UpgradeItem *item)
+{
+    if (--item->refs)
+        return;
+
+    display_channel_drawable_unref(display, item->drawable);
+    free(item->rects);
+    free(item);
+}
+
+static void release_item_after_push(DisplayChannelClient *dcc, PipeItem *item)
+{
+    DisplayChannel *display = DCC_TO_DC(dcc);
+
+    switch (item->type) {
+    case PIPE_ITEM_TYPE_DRAW:
+        drawable_pipe_item_unref(SPICE_CONTAINEROF(item, DrawablePipeItem, dpi_pipe_item));
+        break;
+    case PIPE_ITEM_TYPE_STREAM_CLIP:
+        stream_clip_item_unref(dcc, (StreamClipItem *)item);
+        break;
+    case PIPE_ITEM_TYPE_UPGRADE:
+        upgrade_item_unref(display, (UpgradeItem *)item);
+        break;
+    case PIPE_ITEM_TYPE_IMAGE:
+        image_item_unref((ImageItem *)item);
+        break;
+    case PIPE_ITEM_TYPE_VERB:
+        free(item);
+        break;
+    case PIPE_ITEM_TYPE_MONITORS_CONFIG: {
+        MonitorsConfigItem *monconf_item = SPICE_CONTAINEROF(item,
+                                                             MonitorsConfigItem, pipe_item);
+        monitors_config_unref(monconf_item->monitors_config);
+        free(item);
+        break;
+    }
+    default:
+        spice_critical("invalid item type");
+    }
+}
+
+// TODO: share code between before/after_push since most of the items need the same
+// release
+static void release_item_before_push(DisplayChannelClient *dcc, PipeItem *item)
+{
+    DisplayChannel *display = DCC_TO_DC(dcc);
+
+    spice_debug("item.type: %d", item->type);
+    switch (item->type) {
+    case PIPE_ITEM_TYPE_DRAW: {
+        DrawablePipeItem *dpi = SPICE_CONTAINEROF(item, DrawablePipeItem, dpi_pipe_item);
+        ring_remove(&dpi->base);
+        drawable_pipe_item_unref(dpi);
+        break;
+    }
+    case PIPE_ITEM_TYPE_STREAM_CREATE: {
+        StreamAgent *agent = SPICE_CONTAINEROF(item, StreamAgent, create_item);
+        stream_agent_unref(display, agent);
+        break;
+    }
+    case PIPE_ITEM_TYPE_STREAM_CLIP:
+        stream_clip_item_unref(dcc, (StreamClipItem *)item);
+        break;
+    case PIPE_ITEM_TYPE_STREAM_DESTROY: {
+        StreamAgent *agent = SPICE_CONTAINEROF(item, StreamAgent, destroy_item);
+        stream_agent_unref(display, agent);
+        break;
+    }
+    case PIPE_ITEM_TYPE_UPGRADE:
+        upgrade_item_unref(display, (UpgradeItem *)item);
+        break;
+    case PIPE_ITEM_TYPE_IMAGE:
+        image_item_unref((ImageItem *)item);
+        break;
+    case PIPE_ITEM_TYPE_CREATE_SURFACE: {
+        SurfaceCreateItem *surface_create = SPICE_CONTAINEROF(item, SurfaceCreateItem,
+                                                              pipe_item);
+        free(surface_create);
+        break;
+    }
+    case PIPE_ITEM_TYPE_DESTROY_SURFACE: {
+        SurfaceDestroyItem *surface_destroy = SPICE_CONTAINEROF(item, SurfaceDestroyItem,
+                                                                pipe_item);
+        free(surface_destroy);
+        break;
+    }
+    case PIPE_ITEM_TYPE_MONITORS_CONFIG: {
+        MonitorsConfigItem *monconf_item = SPICE_CONTAINEROF(item,
+                                                             MonitorsConfigItem, pipe_item);
+        monitors_config_unref(monconf_item->monitors_config);
+        free(item);
+        break;
+    }
+    case PIPE_ITEM_TYPE_VERB:
+    case PIPE_ITEM_TYPE_MIGRATE_DATA:
+    case PIPE_ITEM_TYPE_PIXMAP_SYNC:
+    case PIPE_ITEM_TYPE_PIXMAP_RESET:
+    case PIPE_ITEM_TYPE_INVAL_PALLET_CACHE:
+    case PIPE_ITEM_TYPE_STREAM_ACTIVATE_REPORT:
+        free(item);
+        break;
+    default:
+        spice_critical("invalid item type");
+    }
+}
+
+void dcc_release_item(DisplayChannelClient *dcc, PipeItem *item, int item_pushed)
+{
+    if (item_pushed)
+        release_item_after_push(dcc, item);
+    else
+        release_item_before_push(dcc, item);
+}
