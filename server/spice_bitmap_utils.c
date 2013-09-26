@@ -165,3 +165,30 @@ void dump_bitmap(SpiceBitmap *bitmap)
     }
     fclose(f);
 }
+
+uint8_t *spice_bitmap_get_line(const SpiceBitmap *image, size_t *offset,
+                               int *chunk_nr, int stride)
+{
+    SpiceChunks *chunks = image->data;
+    uint8_t *ret;
+    SpiceChunk *chunk;
+
+    chunk = &chunks->chunk[*chunk_nr];
+
+    if (*offset == chunk->len) {
+        if (*chunk_nr == chunks->num_chunks - 1) {
+            return NULL; /* Last chunk */
+        }
+        *offset = 0;
+        (*chunk_nr)++;
+        chunk = &chunks->chunk[*chunk_nr];
+    }
+
+    if (chunk->len - *offset < stride) {
+        spice_warning("bad chunk alignment");
+        return NULL;
+    }
+    ret = chunk->data + *offset;
+    *offset += stride;
+    return ret;
+}
