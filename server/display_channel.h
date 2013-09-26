@@ -384,5 +384,9 @@ void current_remove(DisplayChannel *display, TreeItem *item);
 void detach_streams_behind(DisplayChannel *display, QRegion *region, Drawable *drawable);
 void drawable_draw(DisplayChannel *display, Drawable *item);
 void current_remove_all(DisplayChannel *display, int surface_id);
+void drawables_init(DisplayChannel *display);
+void red_update_area(DisplayChannel *display, const SpiceRect *area, int surface_id);
+void red_update_area_till(DisplayChannel *display, const SpiceRect *area, int surface_id,
+                          Drawable *last);
 
 #endif /* DISPLAY_CHANNEL_H_ */

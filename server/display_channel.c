@@ -989,6 +989,22 @@ static Drawable* drawable_try_new(DisplayChannel *display)
     return drawable;
 }
 
+static void drawable_free(DisplayChannel *display, Drawable *drawable)
+{
+    ((_Drawable *)drawable)->u.next = display->free_drawables;
+    display->free_drawables = (_Drawable *)drawable;
+}
+
+void drawables_init(DisplayChannel *display)
+{
+    int i;
+
+    display->free_drawables = NULL;
+    for (i = 0; i < NUM_DRAWABLES; i++) {
+        drawable_free(display, &display->drawables[i].u.drawable);
+    }
+}
+
 Drawable *display_channel_drawable_try_new(DisplayChannel *display,
                                            int group_id, int process_commands_generation)
 {
@@ -1013,4 +1029,222 @@ Drawable *display_channel_drawable_try_new(DisplayChannel *display,
     drawable->group_id = group_id;
 
     return drawable;
+}
+
+static void depended_item_remove(DependItem *item)
+{
+    spice_return_if_fail(item->drawable);
+    spice_return_if_fail(ring_item_is_linked(&item->ring_item));
+
+    item->drawable = NULL;
+    ring_remove(&item->ring_item);
+}
+
+static void drawable_remove_dependencies(DisplayChannel *display, Drawable *drawable)
+{
+    int x;
+    int surface_id;
+
+    for (x = 0; x < 3; ++x) {
+        surface_id = drawable->surface_deps[x];
+        if (surface_id != -1 && drawable->depend_items[x].drawable) {
+            depended_item_remove(&drawable->depend_items[x]);
+        }
+    }
+}
+
+static void drawable_unref_surface_deps(DisplayChannel *display, Drawable *drawable)
+{
+    int x;
+    int surface_id;
+
+    for (x = 0; x < 3; ++x) {
+        surface_id = drawable->surface_deps[x];
+        if (surface_id == -1) {
+            continue;
+        }
+        display_channel_surface_unref(display, surface_id);
+    }
+}
+
+void display_channel_drawable_unref(DisplayChannel *display, Drawable *drawable)
+{
+    RingItem *item, *next;
+
+    if (--drawable->refs)
+        return;
+
+    spice_return_if_fail(!drawable->tree_item.shadow);
+    spice_return_if_fail(ring_is_empty(&drawable->pipes));
+
+    if (drawable->stream) {
+        detach_stream(display, drawable->stream, TRUE);
+    }
+    region_destroy(&drawable->tree_item.base.rgn);
+
+    drawable_remove_dependencies(display, drawable);
+    drawable_unref_surface_deps(display, drawable);
+    display_channel_surface_unref(display, drawable->surface_id);
+
+    RING_FOREACH_SAFE(item, next, &drawable->glz_ring) {
+        SPICE_CONTAINEROF(item, RedGlzDrawable, drawable_link)->drawable = NULL;
+        ring_remove(item);
+    }
+    red_drawable_unref(COMMON_CHANNEL(display)->worker, drawable->red_drawable, drawable->group_id);
+    drawable_free(display, drawable);
+    display->drawable_count--;
+}
+
+static void drawable_deps_update(DisplayChannel *display, Drawable *drawable)
+{
+    int x;
+    int surface_id;
+
+    for (x = 0; x < 3; ++x) {
+        surface_id = drawable->surface_deps[x];
+        if (surface_id != -1 && drawable->depend_items[x].drawable) {
+            depended_item_remove(&drawable->depend_items[x]);
+            red_update_area(display, &drawable->red_drawable->surfaces_rects[x], surface_id);
+        }
+    }
+}
+
+void drawable_draw(DisplayChannel *display, Drawable *drawable)
+{
+    RedSurface *surface;
+    SpiceCanvas *canvas;
+    SpiceClip clip = drawable->red_drawable->clip;
+
+    drawable_deps_update(display, drawable);
+
+    surface = &display->surfaces[drawable->surface_id];
+    canvas = surface->context.canvas;
+    spice_return_if_fail(canvas);
+
+    image_cache_aging(&display->image_cache);
+
+    region_add(&surface->draw_dirty_region, &drawable->red_drawable->bbox);
+
+    switch (drawable->red_drawable->type) {
+    case QXL_DRAW_FILL: {
+        SpiceFill fill = drawable->red_drawable->u.fill;
+        SpiceImage img1, img2;
+        image_cache_localize_brush(&display->image_cache, &fill.brush, &img1);
+        image_cache_localize_mask(&display->image_cache, &fill.mask, &img2);
+        canvas->ops->draw_fill(canvas, &drawable->red_drawable->bbox,
+                               &clip, &fill);
+        break;
+    }
+    case QXL_DRAW_OPAQUE: {
+        SpiceOpaque opaque = drawable->red_drawable->u.opaque;
+        SpiceImage img1, img2, img3;
+        image_cache_localize_brush(&display->image_cache, &opaque.brush, &img1);
+        image_cache_localize(&display->image_cache, &opaque.src_bitmap, &img2, drawable);
+        image_cache_localize_mask(&display->image_cache, &opaque.mask, &img3);
+        canvas->ops->draw_opaque(canvas, &drawable->red_drawable->bbox, &clip, &opaque);
+        break;
+    }
+    case QXL_DRAW_COPY: {
+        SpiceCopy copy = drawable->red_drawable->u.copy;
+        SpiceImage img1, img2;
+        image_cache_localize(&display->image_cache, &copy.src_bitmap, &img1, drawable);
+        image_cache_localize_mask(&display->image_cache, &copy.mask, &img2);
+        canvas->ops->draw_copy(canvas, &drawable->red_drawable->bbox,
+                               &clip, &copy);
+        break;
+    }
+    case QXL_DRAW_TRANSPARENT: {
+        SpiceTransparent transparent = drawable->red_drawable->u.transparent;
+        SpiceImage img1;
+        image_cache_localize(&display->image_cache, &transparent.src_bitmap, &img1, drawable);
+        canvas->ops->draw_transparent(canvas,
+                                      &drawable->red_drawable->bbox, &clip, &transparent);
+        break;
+    }
+    case QXL_DRAW_ALPHA_BLEND: {
+        SpiceAlphaBlend alpha_blend = drawable->red_drawable->u.alpha_blend;
+        SpiceImage img1;
+        image_cache_localize(&display->image_cache, &alpha_blend.src_bitmap, &img1, drawable);
+        canvas->ops->draw_alpha_blend(canvas,
+                                      &drawable->red_drawable->bbox, &clip, &alpha_blend);
+        break;
+    }
+    case QXL_COPY_BITS: {
+        canvas->ops->copy_bits(canvas, &drawable->red_drawable->bbox,
+                               &clip, &drawable->red_drawable->u.copy_bits.src_pos);
+        break;
+    }
+    case QXL_DRAW_BLEND: {
+        SpiceBlend blend = drawable->red_drawable->u.blend;
+        SpiceImage img1, img2;
+        image_cache_localize(&display->image_cache, &blend.src_bitmap, &img1, drawable);
+        image_cache_localize_mask(&display->image_cache, &blend.mask, &img2);
+        canvas->ops->draw_blend(canvas, &drawable->red_drawable->bbox,
+                                &clip, &blend);
+        break;
+    }
+    case QXL_DRAW_BLACKNESS: {
+        SpiceBlackness blackness = drawable->red_drawable->u.blackness;
+        SpiceImage img1;
+        image_cache_localize_mask(&display->image_cache, &blackness.mask, &img1);
+        canvas->ops->draw_blackness(canvas,
+                                    &drawable->red_drawable->bbox, &clip, &blackness);
+        break;
+    }
+    case QXL_DRAW_WHITENESS: {
+        SpiceWhiteness whiteness = drawable->red_drawable->u.whiteness;
+        SpiceImage img1;
+        image_cache_localize_mask(&display->image_cache, &whiteness.mask, &img1);
+        canvas->ops->draw_whiteness(canvas,
+                                    &drawable->red_drawable->bbox, &clip, &whiteness);
+        break;
+    }
+    case QXL_DRAW_INVERS: {
+        SpiceInvers invers = drawable->red_drawable->u.invers;
+        SpiceImage img1;
+        image_cache_localize_mask(&display->image_cache, &invers.mask, &img1);
+        canvas->ops->draw_invers(canvas,
+                                 &drawable->red_drawable->bbox, &clip, &invers);
+        break;
+    }
+    case QXL_DRAW_ROP3: {
+        SpiceRop3 rop3 = drawable->red_drawable->u.rop3;
+        SpiceImage img1, img2, img3;
+        image_cache_localize_brush(&display->image_cache, &rop3.brush, &img1);
+        image_cache_localize(&display->image_cache, &rop3.src_bitmap, &img2, drawable);
+        image_cache_localize_mask(&display->image_cache, &rop3.mask, &img3);
+        canvas->ops->draw_rop3(canvas, &drawable->red_drawable->bbox,
+                               &clip, &rop3);
+        break;
+    }
+    case QXL_DRAW_COMPOSITE: {
+        SpiceComposite composite = drawable->red_drawable->u.composite;
+        SpiceImage src, mask;
+        image_cache_localize(&display->image_cache, &composite.src_bitmap, &src, drawable);
+        if (composite.mask_bitmap)
+            image_cache_localize(&display->image_cache, &composite.mask_bitmap, &mask, drawable);
+        canvas->ops->draw_composite(canvas, &drawable->red_drawable->bbox,
+                                    &clip, &composite);
+        break;
+    }
+    case QXL_DRAW_STROKE: {
+        SpiceStroke stroke = drawable->red_drawable->u.stroke;
+        SpiceImage img1;
+        image_cache_localize_brush(&display->image_cache, &stroke.brush, &img1);
+        canvas->ops->draw_stroke(canvas,
+                                 &drawable->red_drawable->bbox, &clip, &stroke);
+        break;
+    }
+    case QXL_DRAW_TEXT: {
+        SpiceText text = drawable->red_drawable->u.text;
+        SpiceImage img1, img2;
+        image_cache_localize_brush(&display->image_cache, &text.fore_brush, &img1);
+        image_cache_localize_brush(&display->image_cache, &text.back_brush, &img2);
+        canvas->ops->draw_text(canvas, &drawable->red_drawable->bbox,
+                               &clip, &text);
+        break;
+    }
+    default:
+        spice_warning("invalid type");
+    }
 }
