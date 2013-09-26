@@ -5330,24 +5330,20 @@ static void handle_new_display_channel(RedWorker *worker, RedClient *client, Red
     dcc_start(dcc);
 }
 
-static void surface_dirty_region_to_rects(RedSurface *surface,
-                                          QXLRect *qxl_dirty_rects,
-                                          uint32_t num_dirty_rects)
+static void region_to_qxlrects(QRegion *region, QXLRect *qxl_rects, uint32_t num_rects)
 {
-    QRegion *surface_dirty_region;
-    SpiceRect *dirty_rects;
+    SpiceRect *rects;
     int i;
 
-    surface_dirty_region = &surface->draw_dirty_region;
-    dirty_rects = spice_new0(SpiceRect, num_dirty_rects);
-    region_ret_rects(surface_dirty_region, dirty_rects, num_dirty_rects);
-    for (i = 0; i < num_dirty_rects; i++) {
-        qxl_dirty_rects[i].top    = dirty_rects[i].top;
-        qxl_dirty_rects[i].left   = dirty_rects[i].left;
-        qxl_dirty_rects[i].bottom = dirty_rects[i].bottom;
-        qxl_dirty_rects[i].right  = dirty_rects[i].right;
+    rects = spice_new0(SpiceRect, num_rects);
+    region_ret_rects(region, rects, num_rects);
+    for (i = 0; i < num_rects; i++) {
+        qxl_rects[i].top    = rects[i].top;
+        qxl_rects[i].left   = rects[i].left;
+        qxl_rects[i].bottom = rects[i].bottom;
+        qxl_rects[i].right  = rects[i].right;
     }
-    free(dirty_rects);
+    free(rects);
 }
 
 void display_channel_update(DisplayChannel *display,
@@ -5368,7 +5364,7 @@ void display_channel_update(DisplayChannel *display,
         *qxl_dirty_rects = spice_new0(QXLRect, *num_dirty_rects);
     }
 
-    surface_dirty_region_to_rects(surface, *qxl_dirty_rects, *num_dirty_rects);
+    region_to_qxlrects(&surface->draw_dirty_region, *qxl_dirty_rects, *num_dirty_rects);
     if (clear_dirty)
         region_clear(&surface->draw_dirty_region);
 }
