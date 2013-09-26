@@ -907,3 +907,110 @@ void display_channel_free_glz_drawables(DisplayChannel *display)
         dcc_free_glz_drawables(dcc);
     }
 }
+
+static bool free_one_drawable(DisplayChannel *display, int force_glz_free)
+{
+    RingItem *ring_item = ring_get_tail(&display->current_list);
+    Drawable *drawable;
+    Container *container;
+
+    if (!ring_item)
+        return FALSE;
+
+    drawable = SPICE_CONTAINEROF(ring_item, Drawable, list_link);
+    if (force_glz_free) {
+        RingItem *glz_item, *next_item;
+        RedGlzDrawable *glz;
+        DRAWABLE_FOREACH_GLZ_SAFE(drawable, glz_item, next_item, glz) {
+            dcc_free_glz_drawable(glz->dcc, glz);
+        }
+    }
+    drawable_draw(display, drawable);
+    container = drawable->tree_item.base.container;
+
+    current_remove_drawable(display, drawable);
+    container_cleanup(container);
+    return TRUE;
+}
+
+void display_channel_current_flush(DisplayChannel *display, int surface_id)
+{
+    while (!ring_is_empty(&display->surfaces[surface_id].current_list)) {
+        free_one_drawable(display, FALSE);
+    }
+    current_remove_all(display, surface_id);
+}
+
+void display_channel_free_some(DisplayChannel *display)
+{
+    int n = 0;
+    DisplayChannelClient *dcc;
+    RingItem *item, *next;
+
+#if FIXME
+    spice_debug("#draw=%d, #red_draw=%d, #glz_draw=%d", display->drawable_count,
+                worker->red_drawable_count, worker->glz_drawable_count);
+#endif
+    FOREACH_DCC(display, item, next, dcc) {
+        GlzSharedDictionary *glz_dict = dcc ? dcc->glz_dict : NULL;
+
+        if (glz_dict) {
+            // encoding using the dictionary is prevented since the following operations might
+            // change the dictionary
+            pthread_rwlock_wrlock(&glz_dict->encode_lock);
+            n = dcc_free_some_independent_glz_drawables(dcc);
+        }
+    }
+
+    while (!ring_is_empty(&display->current_list) && n++ < RED_RELEASE_BUNCH_SIZE) {
+        free_one_drawable(display, TRUE);
+    }
+
+    FOREACH_DCC(display, item, next, dcc) {
+        GlzSharedDictionary *glz_dict = dcc ? dcc->glz_dict : NULL;
+
+        if (glz_dict) {
+            pthread_rwlock_unlock(&glz_dict->encode_lock);
+        }
+    }
+}
+
+static Drawable* drawable_try_new(DisplayChannel *display)
+{
+    Drawable *drawable;
+
+    if (!display->free_drawables)
+        return NULL;
+
+    drawable = &display->free_drawables->u.drawable;
+    display->free_drawables = display->free_drawables->u.next;
+    display->drawable_count++;
+
+    return drawable;
+}
+
+Drawable *display_channel_drawable_try_new(DisplayChannel *display,
+                                           int group_id, int process_commands_generation)
+{
+    Drawable *drawable;
+
+    while (!(drawable = drawable_try_new(display))) {
+        if (!free_one_drawable(display, FALSE))
+            return NULL;
+    }
+
+    bzero(drawable, sizeof(Drawable));
+    drawable->refs = 1;
+    drawable->creation_time = red_get_monotonic_time();
+    ring_item_init(&drawable->list_link);
+    ring_item_init(&drawable->surface_list_link);
+    ring_item_init(&drawable->tree_item.base.siblings_link);
+    drawable->tree_item.base.type = TREE_ITEM_TYPE_DRAWABLE;
+    region_init(&drawable->tree_item.base.rgn);
+    ring_init(&drawable->pipes);
+    ring_init(&drawable->glz_ring);
+    drawable->process_commands_generation = process_commands_generation;
+    drawable->group_id = group_id;
+
+    return drawable;
+}

@@ -128,12 +128,10 @@ typedef struct BitmapData {
     SpiceRect lossy_rect;
 } BitmapData;
 
-static void drawable_draw(DisplayChannel *display, Drawable *item);
 static void red_update_area(DisplayChannel *display, const SpiceRect *area, int surface_id);
 static void red_update_area_till(DisplayChannel *display, const SpiceRect *area, int surface_id,
                                  Drawable *last);
 static inline void display_begin_send_message(RedChannelClient *rcc);
-static int red_display_free_some_independent_glz_drawables(DisplayChannelClient *dcc);
 static void red_create_surface(DisplayChannel *display, uint32_t surface_id, uint32_t width,
                                uint32_t height, int32_t stride, uint32_t format,
                                void *line_0, int data_is_valid, int send_client);
@@ -166,7 +164,6 @@ static inline int validate_surface(DisplayChannel *display, uint32_t surface_id)
     }
     return 1;
 }
-
 
 static int display_is_connected(RedWorker *worker)
 {
@@ -223,20 +220,6 @@ static void common_release_recv_buf(RedChannelClient *rcc, uint16_t type, uint32
     }
 }
 
-
-static Drawable* drawable_try_new(DisplayChannel *display)
-{
-    Drawable *drawable;
-
-    if (!display->free_drawables)
-        return NULL;
-
-    drawable = &display->free_drawables->u.drawable;
-    display->free_drawables = display->free_drawables->u.next;
-    display->drawable_count++;
-
-    return drawable;
-}
 
 static void drawable_free(DisplayChannel *display, Drawable *drawable)
 {
@@ -422,7 +405,7 @@ void current_remove(DisplayChannel *display, TreeItem *item)
     }
 }
 
-static void current_remove_all(DisplayChannel *display, int surface_id)
+void current_remove_all(DisplayChannel *display, int surface_id)
 {
     Ring *ring = &display->surfaces[surface_id].current;
     RingItem *ring_item;
@@ -763,57 +746,6 @@ static inline int red_handle_self_bitmap(RedWorker *worker, Drawable *drawable)
     return TRUE;
 }
 
-static bool free_one_drawable(DisplayChannel *display, int force_glz_free)
-{
-    RingItem *ring_item = ring_get_tail(&display->current_list);
-    Drawable *drawable;
-    Container *container;
-
-    if (!ring_item)
-        return FALSE;
-
-    drawable = SPICE_CONTAINEROF(ring_item, Drawable, list_link);
-    if (force_glz_free) {
-        RingItem *glz_item, *next_item;
-        RedGlzDrawable *glz;
-        DRAWABLE_FOREACH_GLZ_SAFE(drawable, glz_item, next_item, glz) {
-            dcc_free_glz_drawable(glz->dcc, glz);
-        }
-    }
-    drawable_draw(display, drawable);
-    container = drawable->tree_item.base.container;
-
-    current_remove_drawable(display, drawable);
-    container_cleanup(container);
-    return TRUE;
-}
-
-Drawable *display_channel_drawable_try_new(DisplayChannel *display,
-                                           int group_id, int process_commands_generation)
-{
-    Drawable *drawable;
-
-    while (!(drawable = drawable_try_new(display))) {
-        if (!free_one_drawable(display, FALSE))
-            return NULL;
-    }
-
-    bzero(drawable, sizeof(Drawable));
-    drawable->refs = 1;
-    drawable->creation_time = red_get_monotonic_time();
-    ring_item_init(&drawable->list_link);
-    ring_item_init(&drawable->surface_list_link);
-    ring_item_init(&drawable->tree_item.base.siblings_link);
-    drawable->tree_item.base.type = TREE_ITEM_TYPE_DRAWABLE;
-    region_init(&drawable->tree_item.base.rgn);
-    ring_init(&drawable->pipes);
-    ring_init(&drawable->glz_ring);
-    drawable->process_commands_generation = process_commands_generation;
-    drawable->group_id = group_id;
-
-    return drawable;
-}
-
 static inline int red_handle_depends_on_target_surface(DisplayChannel *display, uint32_t surface_id)
 {
     RedSurface *surface;
@@ -1032,7 +964,7 @@ static SpiceCanvas *image_surfaces_get(SpiceImageSurfaces *surfaces, uint32_t su
     return display->surfaces[surface_id].context.canvas;
 }
 
-static void drawable_draw(DisplayChannel *display, Drawable *drawable)
+void drawable_draw(DisplayChannel *display, Drawable *drawable)
 {
     RedSurface *surface;
     SpiceCanvas *canvas;
@@ -1531,51 +1463,6 @@ static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *
     return n;
 }
 
-#define RED_RELEASE_BUNCH_SIZE 64
-
-static void red_free_some(RedWorker *worker)
-{
-    DisplayChannel *display = worker->display_channel;
-    int n = 0;
-    DisplayChannelClient *dcc;
-    RingItem *item, *next;
-
-#if FIXME
-    spice_debug("#draw=%d, #red_draw=%d, #glz_draw=%d", display->drawable_count,
-                worker->red_drawable_count, worker->glz_drawable_count);
-#endif
-    FOREACH_DCC(worker->display_channel, item, next, dcc) {
-        GlzSharedDictionary *glz_dict = dcc ? dcc->glz_dict : NULL;
-
-        if (glz_dict) {
-            // encoding using the dictionary is prevented since the following operations might
-            // change the dictionary
-            pthread_rwlock_wrlock(&glz_dict->encode_lock);
-            n = red_display_free_some_independent_glz_drawables(dcc);
-        }
-    }
-
-    while (!ring_is_empty(&display->current_list) && n++ < RED_RELEASE_BUNCH_SIZE) {
-        free_one_drawable(display, TRUE);
-    }
-
-    FOREACH_DCC(worker->display_channel, item, next, dcc) {
-        GlzSharedDictionary *glz_dict = dcc ? dcc->glz_dict : NULL;
-
-        if (glz_dict) {
-            pthread_rwlock_unlock(&glz_dict->encode_lock);
-        }
-    }
-}
-
-void display_channel_current_flush(DisplayChannel *display, int surface_id)
-{
-    while (!ring_is_empty(&display->surfaces[surface_id].current_list)) {
-        free_one_drawable(display, FALSE);
-    }
-    current_remove_all(display, surface_id);
-}
-
 static inline void fill_rects_clip(SpiceMarshaller *m, SpiceClipRects *data)
 {
     int i;
@@ -1595,31 +1482,6 @@ static void fill_base(SpiceMarshaller *base_marshaller, Drawable *drawable)
     base.clip = drawable->red_drawable->clip;
 
     spice_marshall_DisplayBase(base_marshaller, &base);
-}
-
-/*
- * Remove from the global lz dictionary some glz_drawables that have no reference to
- * Drawable (their qxl drawables are released too).
- * NOTE - the caller should prevent encoding using the dictionary during the operation
- */
-static int red_display_free_some_independent_glz_drawables(DisplayChannelClient *dcc)
-{
-    RingItem *ring_link;
-    int n = 0;
-
-    if (!dcc) {
-        return 0;
-    }
-    ring_link = ring_get_head(&dcc->glz_drawables);
-    while ((n < RED_RELEASE_BUNCH_SIZE) && (ring_link != NULL)) {
-        RedGlzDrawable *glz_drawable = SPICE_CONTAINEROF(ring_link, RedGlzDrawable, link);
-        ring_link = ring_next(&dcc->glz_drawables, ring_link);
-        if (!glz_drawable->drawable) {
-            dcc_free_glz_drawable(dcc, glz_drawable);
-            n++;
-        }
-    }
-    return n;
 }
 
 static inline void red_display_add_image_to_pixmap_cache(RedChannelClient *rcc,
@@ -5147,7 +5009,7 @@ static void handle_dev_oom(void *opaque, uint32_t message_type, void *payload)
         red_channel_push(&worker->display_channel->common.base);
     }
     if (worker->qxl->st->qif->flush_resources(worker->qxl) == 0) {
-        red_free_some(worker);
+        display_channel_free_some(worker->display_channel);
         worker->qxl->st->qif->flush_resources(worker->qxl);
     }
 #if FIXME
