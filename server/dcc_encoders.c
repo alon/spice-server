@@ -432,6 +432,31 @@ void dcc_free_glz_drawable(DisplayChannelClient *dcc, RedGlzDrawable *drawable)
     }
 }
 
+/*
+ * Remove from the global lz dictionary some glz_drawables that have no reference to
+ * Drawable (their qxl drawables are released too).
+ * NOTE - the caller should prevent encoding using the dictionary during the operation
+ */
+int dcc_free_some_independent_glz_drawables(DisplayChannelClient *dcc)
+{
+    RingItem *ring_link;
+    int n = 0;
+
+    if (!dcc) {
+        return 0;
+    }
+    ring_link = ring_get_head(&dcc->glz_drawables);
+    while ((n < RED_RELEASE_BUNCH_SIZE) && (ring_link != NULL)) {
+        RedGlzDrawable *glz_drawable = SPICE_CONTAINEROF(ring_link, RedGlzDrawable, link);
+        ring_link = ring_next(&dcc->glz_drawables, ring_link);
+        if (!glz_drawable->drawable) {
+            dcc_free_glz_drawable(dcc, glz_drawable);
+            n++;
+        }
+    }
+    return n;
+}
+
 void dcc_free_glz_drawables_to_free(DisplayChannelClient* dcc)
 {
     RingItem *ring_link;
