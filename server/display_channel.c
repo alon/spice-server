@@ -1269,6 +1269,24 @@ static void surface_update_dest(RedSurface *surface, const SpiceRect *area)
     canvas->ops->read_bits(canvas, dest, -stride, area);
 }
 
+static void draw_until(DisplayChannel *display, RedSurface *surface, Drawable *last)
+{
+    RingItem *ring_item;
+    Container *container;
+    Drawable *now;
+
+    do {
+        ring_item = ring_get_tail(&surface->current_list);
+        now = SPICE_CONTAINEROF(ring_item, Drawable, surface_list_link);
+        now->refs++;
+        container = now->tree_item.base.container;
+        current_remove_drawable(display, now);
+        container_cleanup(container);
+        drawable_draw(display, now);
+        display_channel_drawable_unref(display, now);
+    } while (now != last);
+}
+
 /*
  * Renders drawables for updating the requested area, but only drawables that are older
  * than 'last' (exclusive).
@@ -1328,27 +1346,18 @@ void display_channel_draw_till(DisplayChannel *display, const SpiceRect *area, i
 
     region_destroy(&rgn);
 
-    if (!surface_last) {
-        return;
-    }
+    /* drawable_draw may call display_channel_draw for the surfaces
+     * 'now' depends on. Notice, that it is valid to call
+     * display_channel_draw in this case and not
+     * display_channel_draw_till: It is impossible that there was
+     * newer item then 'last' in one of the surfaces that
+     * display_channel_draw is called for, Otherwise, 'now' would have
+     * already been rendered.  See the call for
+     * red_handle_depends_on_target_surface in red_process_draw
+     */
+    if (surface_last)
+        draw_until(display, surface, surface_last);
 
-    do {
-        Container *container;
-
-        ring_item = ring_get_tail(&surface->current_list);
-        now = SPICE_CONTAINEROF(ring_item, Drawable, surface_list_link);
-        now->refs++;
-        container = now->tree_item.base.container;
-        current_remove_drawable(display, now);
-        container_cleanup(container);
-        /* drawable_draw may call display_channel_draw for the surfaces 'now' depends on. Notice,
-           that it is valid to call display_channel_draw in this case and not display_channel_draw_till:
-           It is impossible that there was newer item then 'last' in one of the surfaces
-           that display_channel_draw is called for, Otherwise, 'now' would have already been rendered.
-           See the call for red_handle_depends_on_target_surface in red_process_draw */
-        drawable_draw(display, now);
-        display_channel_drawable_unref(display, now);
-    } while (now != surface_last);
     surface_update_dest(surface, area);
 }
 
@@ -1358,8 +1367,7 @@ void display_channel_draw(DisplayChannel *display, const SpiceRect *area, int su
     Ring *ring;
     RingItem *ring_item;
     QRegion rgn;
-    Drawable *last;
-    Drawable *now;
+    Drawable *last, *now;
     spice_debug("surface %d: area ==>", surface_id);
     rect_debug(area);
 
@@ -1385,22 +1393,8 @@ void display_channel_draw(DisplayChannel *display, const SpiceRect *area, int su
     }
     region_destroy(&rgn);
 
-    if (!last) {
-        surface_update_dest(surface, area);
-        return;
-    }
+    if (last)
+        draw_until(display, surface, last);
 
-    do {
-        Container *container;
-
-        ring_item = ring_get_tail(&surface->current_list);
-        now = SPICE_CONTAINEROF(ring_item, Drawable, surface_list_link);
-        now->refs++;
-        container = now->tree_item.base.container;
-        current_remove_drawable(display, now);
-        container_cleanup(container);
-        drawable_draw(display, now);
-        display_channel_drawable_unref(display, now);
-    } while (now != last);
     surface_update_dest(surface, area);
 }
