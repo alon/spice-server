@@ -237,7 +237,7 @@ typedef struct UpgradeItem {
 void                       display_channel_draw                      (DisplayChannel *display,
                                                                       const SpiceRect *area,
                                                                       int surface_id);
-void                       display_channel_draw_till                 (DisplayChannel *display,
+void                       display_channel_draw_until                (DisplayChannel *display,
                                                                       const SpiceRect *area,
                                                                       int surface_id,
                                                                       Drawable *last);

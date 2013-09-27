@@ -1287,20 +1287,18 @@ static void draw_until(DisplayChannel *display, RedSurface *surface, Drawable *l
     } while (now != last);
 }
 
-static Drawable* current_find_intersects_rect(Ring *current, const SpiceRect *area)
+static Drawable* current_find_intersects_rect(Ring *current, RingItem *from,
+                                              const SpiceRect *area)
 {
-    Ring *ring;
-    RingItem *ring_item;
+    RingItem *it;
     QRegion rgn;
     Drawable *last = NULL, *now;
 
-    ring = current;
-    ring_item = ring;
     region_init(&rgn);
     region_add(&rgn, area);
 
-    while ((ring_item = ring_next(ring, ring_item))) {
-        now = SPICE_CONTAINEROF(ring_item, Drawable, surface_list_link);
+    for (it = from ?: ring_next(current, current); it != NULL; it = ring_next(current, it)) {
+        now = SPICE_CONTAINEROF(it, Drawable, surface_list_link);
         if (region_intersects(&rgn, &now->tree_item.base.rgn)) {
             last = now;
             break;
@@ -1316,7 +1314,7 @@ static Drawable* current_find_intersects_rect(Ring *current, const SpiceRect *ar
  * than 'last' (exclusive).
  * FIXME: merge with display_channel_draw()?
  */
-void display_channel_draw_till(DisplayChannel *display, const SpiceRect *area, int surface_id,
+void display_channel_draw_until(DisplayChannel *display, const SpiceRect *area, int surface_id,
                                Drawable *last)
 {
     RedSurface *surface;
@@ -1324,7 +1322,6 @@ void display_channel_draw_till(DisplayChannel *display, const SpiceRect *area, i
     Ring *ring;
     RingItem *ring_item;
     Drawable *now;
-    QRegion rgn;
 
     spice_return_if_fail(last);
     spice_return_if_fail(ring_item_is_linked(&last->list_link));
@@ -1349,26 +1346,13 @@ void display_channel_draw_till(DisplayChannel *display, const SpiceRect *area, i
         }
     }
 
-    if (!surface_last) {
+    if (!surface_last)
         return;
-    }
 
-    ring = &surface->current_list;
-    ring_item = &surface_last->surface_list_link;
-
-    region_init(&rgn);
-    region_add(&rgn, area);
-
-    // find the first older drawable that intersects with the area
-    do {
-        now = SPICE_CONTAINEROF(ring_item, Drawable, surface_list_link);
-        if (region_intersects(&rgn, &now->tree_item.base.rgn)) {
-            surface_last = now;
-            break;
-        }
-    } while ((ring_item = ring_next(ring, ring_item)));
-
-    region_destroy(&rgn);
+    last = current_find_intersects_rect(&surface->current_list,
+                                        &surface_last->surface_list_link, area);
+    if (!last)
+        return;
 
     /* drawable_draw may call display_channel_draw for the surfaces
      * 'now' depends on. Notice, that it is valid to call
@@ -1379,9 +1363,7 @@ void display_channel_draw_till(DisplayChannel *display, const SpiceRect *area, i
      * already been rendered.  See the call for
      * red_handle_depends_on_target_surface in red_process_draw
      */
-    if (surface_last)
-        draw_until(display, surface, surface_last);
-
+    draw_until(display, surface, last);
     surface_update_dest(surface, area);
 }
 
@@ -1400,7 +1382,7 @@ void display_channel_draw(DisplayChannel *display, const SpiceRect *area, int su
 
     surface = &display->surfaces[surface_id];
 
-    last = current_find_intersects_rect(&surface->current_list, area);
+    last = current_find_intersects_rect(&surface->current_list, NULL, area);
     if (!last)
         return;
 

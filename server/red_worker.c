@@ -484,7 +484,7 @@ static void dcc_detach_stream_gracefully(DisplayChannelClient *dcc,
                     stream_id, stream->current != NULL);
         rect_debug(&upgrade_area);
         if (update_area_limit) {
-            display_channel_draw_till(DCC_TO_DC(dcc), &upgrade_area, 0, update_area_limit);
+            display_channel_draw_until(DCC_TO_DC(dcc), &upgrade_area, 0, update_area_limit);
         } else {
             display_channel_draw(DCC_TO_DC(dcc), &upgrade_area, 0);
         }
@@ -1655,8 +1655,7 @@ static void red_add_lossless_drawable_dependencies(RedChannelClient *rcc,
     } else {
         sync_rendered = FALSE;
         for (i = 0; i < num_deps; i++) {
-            display_channel_draw_till(display, deps_areas[i],
-                                 deps_surfaces_ids[i], item);
+            display_channel_draw_until(display, deps_areas[i], deps_surfaces_ids[i], item);
         }
     }
 
