@@ -247,6 +247,12 @@ void                       display_channel_draw_until                (DisplayCha
                                                                       const SpiceRect *area,
                                                                       int surface_id,
                                                                       Drawable *last);
+void                       display_channel_update                    (DisplayChannel *display,
+                                                                      uint32_t surface_id,
+                                                                      const QXLRect *area,
+                                                                      uint32_t clear_dirty,
+                                                                      QXLRect **qxl_dirty_rects,
+                                                                      uint32_t *num_dirty_rects);
 void                       display_channel_free_some                 (DisplayChannel *display);
 void                       display_channel_set_stream_video          (DisplayChannel *display,
                                                                       int stream_video);
