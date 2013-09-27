@@ -861,26 +861,23 @@ static SpiceCanvas *image_surfaces_get(SpiceImageSurfaces *surfaces, uint32_t su
     return display->surfaces[surface_id].context.canvas;
 }
 
-static void validate_area(DisplayChannel *display, const SpiceRect *area, uint32_t surface_id)
+static void surface_update_dest(RedSurface *surface, const SpiceRect *area)
 {
-    RedSurface *surface;
+    SpiceCanvas *canvas = surface->context.canvas;
+    int h = area->bottom - area->top;
+    int stride = surface->context.stride;
+    uint8_t *line_0 = surface->context.line_0;
 
-    surface = &display->surfaces[surface_id];
-    if (!surface->context.canvas_draws_on_surface) {
-        SpiceCanvas *canvas = surface->context.canvas;
-        int h;
-        int stride = surface->context.stride;
-        uint8_t *line_0 = surface->context.line_0;
+    if (surface->context.canvas_draws_on_surface)
+        return;
+    if (h == 0)
+        return;
 
-        if (!(h = area->bottom - area->top)) {
-            return;
-        }
+    spice_return_if_fail(stride < 0);
 
-        spice_assert(stride < 0);
-        uint8_t *dest = line_0 + (area->top * stride) + area->left * sizeof(uint32_t);
-        dest += (h - 1) * stride;
-        canvas->ops->read_bits(canvas, dest, -stride, area);
-    }
+    uint8_t *dest = line_0 + (area->top * stride) + area->left * sizeof(uint32_t);
+    dest += (h - 1) * stride;
+    canvas->ops->read_bits(canvas, dest, -stride, area);
 }
 
 /*
@@ -962,7 +959,7 @@ void display_channel_draw_till(DisplayChannel *display, const SpiceRect *area, i
         drawable_draw(display, now);
         display_channel_drawable_unref(display, now);
     } while (now != surface_last);
-    validate_area(display, area, surface_id);
+    surface_update_dest(surface, area);
 }
 
 void display_channel_draw(DisplayChannel *display, const SpiceRect *area, int surface_id)
@@ -999,7 +996,7 @@ void display_channel_draw(DisplayChannel *display, const SpiceRect *area, int su
     region_destroy(&rgn);
 
     if (!last) {
-        validate_area(display, area, surface_id);
+        surface_update_dest(surface, area);
         return;
     }
 
@@ -1015,7 +1012,7 @@ void display_channel_draw(DisplayChannel *display, const SpiceRect *area, int su
         drawable_draw(display, now);
         display_channel_drawable_unref(display, now);
     } while (now != last);
-    validate_area(display, area, surface_id);
+    surface_update_dest(surface, area);
 }
 
 static int red_process_cursor(RedWorker *worker, uint32_t max_pipe_size, int *ring_is_empty)
