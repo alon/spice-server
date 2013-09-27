@@ -127,9 +127,6 @@ typedef struct BitmapData {
 } BitmapData;
 
 static inline void display_begin_send_message(RedChannelClient *rcc);
-static void red_create_surface(DisplayChannel *display, uint32_t surface_id, uint32_t width,
-                               uint32_t height, int32_t stride, uint32_t format,
-                               void *line_0, int data_is_valid, int send_client);
 
 GMainContext* red_worker_get_context(RedWorker *worker)
 {
@@ -688,11 +685,11 @@ static inline void red_process_surface(RedWorker *worker, RedSurfaceCmd *surface
         if (stride < 0) {
             data -= (int32_t)(stride * (height - 1));
         }
-        red_create_surface(worker->display_channel, surface_id, surface->u.surface_create.width,
-                           height, stride, surface->u.surface_create.format, data,
-                           reloaded_surface,
-                           // reloaded surfaces will be sent on demand
-                           !reloaded_surface);
+        display_channel_create_surface(worker->display_channel, surface_id, surface->u.surface_create.width,
+                                       height, stride, surface->u.surface_create.format, data,
+                                       reloaded_surface,
+                                       // reloaded surfaces will be sent on demand
+                                       !reloaded_surface);
         display_channel_set_surface_release_info(display, surface_id, 1, surface->release_info, group_id);
         break;
     }
@@ -3399,110 +3396,6 @@ static void red_migrate_display(DisplayChannel *display, RedChannelClient *rcc)
     }
 }
 
-static inline void *create_canvas_for_surface(DisplayChannel *display, RedSurface *surface,
-                                              uint32_t renderer, uint32_t width, uint32_t height,
-                                              int32_t stride, uint32_t format, void *line_0)
-{
-    SpiceCanvas *canvas;
-
-    switch (renderer) {
-    case RED_RENDERER_SW:
-        canvas = canvas_create_for_data(width, height, format,
-                                        line_0, stride,
-                                        &display->image_cache.base,
-                                        &display->image_surfaces, NULL, NULL, NULL);
-        surface->context.top_down = TRUE;
-        surface->context.canvas_draws_on_surface = TRUE;
-        return canvas;
-    default:
-        spice_error("invalid renderer type");
-    };
-
-    return NULL;
-}
-
-static void red_worker_create_surface_item(DisplayChannel *display, int surface_id)
-{
-    DisplayChannelClient *dcc;
-    RingItem *item, *next;
-
-    FOREACH_DCC(display, item, next, dcc) {
-        dcc_create_surface(dcc, surface_id);
-    }
-}
-
-
-static void red_worker_push_surface_image(DisplayChannel *display, int surface_id)
-{
-    DisplayChannelClient *dcc;
-    RingItem *item, *next;
-
-    FOREACH_DCC(display, item, next, dcc) {
-        dcc_push_surface_image(dcc, surface_id);
-    }
-}
-
-static void red_create_surface(DisplayChannel *display, uint32_t surface_id, uint32_t width,
-                               uint32_t height, int32_t stride, uint32_t format,
-                               void *line_0, int data_is_valid, int send_client)
-{
-    RedSurface *surface = &display->surfaces[surface_id];
-    uint32_t i;
-
-    spice_warn_if(surface->context.canvas);
-
-    surface->context.canvas_draws_on_surface = FALSE;
-    surface->context.width = width;
-    surface->context.height = height;
-    surface->context.format = format;
-    surface->context.stride = stride;
-    surface->context.line_0 = line_0;
-    if (!data_is_valid) {
-        memset((char *)line_0 + (int32_t)(stride * (height - 1)), 0, height*abs(stride));
-    }
-    surface->create.info = NULL;
-    surface->destroy.info = NULL;
-    ring_init(&surface->current);
-    ring_init(&surface->current_list);
-    ring_init(&surface->depend_on_me);
-    region_init(&surface->draw_dirty_region);
-    surface->refs = 1;
-    if (display->renderer != RED_RENDERER_INVALID) {
-        surface->context.canvas = create_canvas_for_surface(display, surface, display->renderer,
-                                                            width, height, stride,
-                                                            surface->context.format, line_0);
-        if (!surface->context.canvas) {
-            spice_critical("drawing canvas creating failed - can`t create same type canvas");
-        }
-
-        if (send_client) {
-            red_worker_create_surface_item(display, surface_id);
-            if (data_is_valid) {
-                red_worker_push_surface_image(display, surface_id);
-            }
-        }
-        return;
-    }
-
-    for (i = 0; i < display->num_renderers; i++) {
-        surface->context.canvas = create_canvas_for_surface(display, surface, display->renderers[i],
-                                                            width, height, stride,
-                                                            surface->context.format, line_0);
-        if (surface->context.canvas) { //no need canvas check
-            display->renderer = display->renderers[i];
-            if (send_client) {
-                red_worker_create_surface_item(display, surface_id);
-                if (data_is_valid) {
-                    red_worker_push_surface_image(display, surface_id);
-                }
-            }
-            return;
-        }
-    }
-
-    spice_critical("unable to create drawing canvas");
-}
-
 static inline void flush_display_commands(RedWorker *worker)
 {
     RedChannel *display_red_channel = RED_CHANNEL(worker->display_channel);
@@ -4112,8 +4005,8 @@ static void dev_create_primary_surface(RedWorker *worker, uint32_t surface_id,
                     &surface, line_0);
     }
 
-    red_create_surface(display, 0, surface.width, surface.height, surface.stride, surface.format,
-                       line_0, surface.flags & QXL_SURF_FLAG_KEEP_DATA, TRUE);
+    display_channel_create_surface(display, 0, surface.width, surface.height, surface.stride, surface.format,
+                                   line_0, surface.flags & QXL_SURF_FLAG_KEEP_DATA, TRUE);
     set_monitors_config_to_primary(display);
 
     if (display_is_connected(worker) && !worker->display_channel->common.during_target_migrate) {
