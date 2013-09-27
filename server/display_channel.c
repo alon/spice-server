@@ -1468,16 +1468,14 @@ static void send_create_surface(DisplayChannel *display, int surface_id, int ima
 }
 
 static SpiceCanvas*
-create_canvas_for_surface(DisplayChannel *display, RedSurface *surface,
-                          uint32_t renderer, uint32_t width, uint32_t height,
-                          int32_t stride, uint32_t format, void *line_0)
+create_canvas_for_surface(DisplayChannel *display, RedSurface *surface, uint32_t renderer)
 {
     SpiceCanvas *canvas;
 
     switch (renderer) {
     case RED_RENDERER_SW:
-        canvas = canvas_create_for_data(width, height, format,
-                                        line_0, stride,
+        canvas = canvas_create_for_data(surface->context.width, surface->context.height, surface->context.format,
+                                        surface->context.line_0, surface->context.stride,
                                         &display->image_cache.base,
                                         &display->image_surfaces, NULL, NULL, NULL);
         surface->context.top_down = TRUE;
@@ -1495,7 +1493,6 @@ void display_channel_create_surface(DisplayChannel *display, uint32_t surface_id
                                     void *line_0, int data_is_valid, int send_client)
 {
     RedSurface *surface = &display->surfaces[surface_id];
-    uint32_t i;
 
     spice_warn_if(surface->context.canvas);
 
@@ -1506,6 +1503,7 @@ void display_channel_create_surface(DisplayChannel *display, uint32_t surface_id
     surface->context.stride = stride;
     surface->context.line_0 = line_0;
     if (!data_is_valid) {
+        spice_return_if_fail(stride < 0);
         memset((char *)line_0 + (int32_t)(stride * (height - 1)), 0, height*abs(stride));
     }
     surface->create.info = NULL;
@@ -1515,32 +1513,24 @@ void display_channel_create_surface(DisplayChannel *display, uint32_t surface_id
     ring_init(&surface->depend_on_me);
     region_init(&surface->draw_dirty_region);
     surface->refs = 1;
-    if (display->renderer != RED_RENDERER_INVALID) {
-        surface->context.canvas = create_canvas_for_surface(display, surface, display->renderer,
-                                                            width, height, stride,
-                                                            surface->context.format, line_0);
-        if (!surface->context.canvas) {
-            spice_critical("drawing canvas creating failed - can`t create same type canvas");
-        }
 
-        if (send_client)
-            send_create_surface(display, surface_id, data_is_valid);
-        return;
+    if (display->renderer == RED_RENDERER_INVALID) {
+        int i;
+        for (i = 0; i < display->num_renderers; i++) {
+            surface->context.canvas = create_canvas_for_surface(display, surface, display->renderers[i]);
+            if (surface->context.canvas) {
+                display->renderer = display->renderers[i];
+                break;
+            }
+        }
+    } else {
+        surface->context.canvas = create_canvas_for_surface(display, surface, display->renderer);
+        spice_warn_if_fail(surface->context.canvas);
     }
 
-    for (i = 0; i < display->num_renderers; i++) {
-        surface->context.canvas = create_canvas_for_surface(display, surface, display->renderers[i],
-                                                            width, height, stride,
-                                                            surface->context.format, line_0);
-        if (surface->context.canvas) { //no need canvas check
-            display->renderer = display->renderers[i];
-            if (send_client)
-                send_create_surface(display, surface_id, data_is_valid);
-            return;
-        }
-    }
-
-    spice_critical("unable to create drawing canvas");
+    spice_return_if_fail(surface->context.canvas);
+    if (send_client)
+        send_create_surface(display, surface_id, data_is_valid);
 }
 
 static void on_disconnect(RedChannelClient *rcc)
