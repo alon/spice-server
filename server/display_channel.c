@@ -1390,6 +1390,45 @@ void display_channel_draw(DisplayChannel *display, const SpiceRect *area, int su
     surface_update_dest(surface, area);
 }
 
+static void region_to_qxlrects(QRegion *region, QXLRect *qxl_rects, uint32_t num_rects)
+{
+    SpiceRect *rects;
+    int i;
+
+    rects = spice_new0(SpiceRect, num_rects);
+    region_ret_rects(region, rects, num_rects);
+    for (i = 0; i < num_rects; i++) {
+        qxl_rects[i].top    = rects[i].top;
+        qxl_rects[i].left   = rects[i].left;
+        qxl_rects[i].bottom = rects[i].bottom;
+        qxl_rects[i].right  = rects[i].right;
+    }
+    free(rects);
+}
+
+void display_channel_update(DisplayChannel *display,
+                            uint32_t surface_id, const QXLRect *area, uint32_t clear_dirty,
+                            QXLRect **qxl_dirty_rects, uint32_t *num_dirty_rects)
+{
+    SpiceRect rect;
+    RedSurface *surface;
+
+    spice_return_if_fail(validate_surface(display, surface_id));
+
+    red_get_rect_ptr(&rect, area);
+    display_channel_draw(display, &rect, surface_id);
+
+    surface = &display->surfaces[surface_id];
+    if (!*qxl_dirty_rects) {
+        *num_dirty_rects = pixman_region32_n_rects(&surface->draw_dirty_region);
+        *qxl_dirty_rects = spice_new0(QXLRect, *num_dirty_rects);
+    }
+
+    region_to_qxlrects(&surface->draw_dirty_region, *qxl_dirty_rects, *num_dirty_rects);
+    if (clear_dirty)
+        region_clear(&surface->draw_dirty_region);
+}
+
 static void clear_surface_drawables_from_pipes(DisplayChannel *display, int surface_id,
                                                int wait_if_used)
 {
