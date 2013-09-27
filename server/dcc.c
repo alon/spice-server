@@ -1,6 +1,8 @@
 #include "dcc.h"
 #include "display_channel.h"
 
+#define DISPLAY_CLIENT_SHORT_TIMEOUT 15000000000ULL //nano
+
 static SurfaceCreateItem *surface_create_item_new(RedChannel* channel,
                                                   uint32_t surface_id, uint32_t width,
                                                   uint32_t height, uint32_t format, uint32_t flags)
@@ -19,6 +21,84 @@ static SurfaceCreateItem *surface_create_item_new(RedChannel* channel,
     red_channel_pipe_item_init(channel,
                                &create->pipe_item, PIPE_ITEM_TYPE_CREATE_SURFACE);
     return create;
+}
+
+/*
+ * Return: TRUE if wait_if_used == FALSE, or otherwise, if all of the pipe items that
+ * are related to the surface have been cleared (or sent) from the pipe.
+ */
+int dcc_clear_surface_drawables_from_pipe(DisplayChannelClient *dcc, int surface_id,
+                                          int wait_if_used)
+{
+    Ring *ring;
+    PipeItem *item;
+    int x;
+    RedChannelClient *rcc;
+
+    spice_return_val_if_fail(dcc != NULL, TRUE);
+    /* removing the newest drawables that their destination is surface_id and
+       no other drawable depends on them */
+
+    rcc = RED_CHANNEL_CLIENT(dcc);
+    ring = &rcc->pipe;
+    item = (PipeItem *) ring;
+    while ((item = (PipeItem *)ring_next(ring, (RingItem *)item))) {
+        Drawable *drawable;
+        DrawablePipeItem *dpi = NULL;
+        int depend_found = FALSE;
+
+        if (item->type == PIPE_ITEM_TYPE_DRAW) {
+            dpi = SPICE_CONTAINEROF(item, DrawablePipeItem, dpi_pipe_item);
+            drawable = dpi->drawable;
+        } else if (item->type == PIPE_ITEM_TYPE_UPGRADE) {
+            drawable = ((UpgradeItem *)item)->drawable;
+        } else {
+            continue;
+        }
+
+        if (drawable->surface_id == surface_id) {
+            PipeItem *tmp_item = item;
+            item = (PipeItem *)ring_prev(ring, (RingItem *)item);
+            red_channel_client_pipe_remove_and_release(rcc, tmp_item);
+            if (!item) {
+                item = (PipeItem *)ring;
+            }
+            continue;
+        }
+
+        for (x = 0; x < 3; ++x) {
+            if (drawable->surface_deps[x] == surface_id) {
+                depend_found = TRUE;
+                break;
+            }
+        }
+
+        if (depend_found) {
+            spice_debug("surface %d dependent item found %p, %p", surface_id, drawable, item);
+            if (wait_if_used) {
+                break;
+            } else {
+                return TRUE;
+            }
+        }
+    }
+
+    if (!wait_if_used) {
+        return TRUE;
+    }
+
+    if (item) {
+        return red_channel_client_wait_pipe_item_sent(RED_CHANNEL_CLIENT(dcc), item,
+                                                      DISPLAY_CLIENT_TIMEOUT);
+    } else {
+        /*
+         * in case that the pipe didn't contain any item that is dependent on the surface, but
+         * there is one during sending. Use a shorter timeout, since it is just one item
+         */
+        return red_channel_client_wait_outgoing_item(RED_CHANNEL_CLIENT(dcc),
+                                                     DISPLAY_CLIENT_SHORT_TIMEOUT);
+    }
+    return TRUE;
 }
 
 void dcc_create_surface(DisplayChannelClient *dcc, int surface_id)

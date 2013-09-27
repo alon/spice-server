@@ -1361,7 +1361,7 @@ void display_channel_draw_until(DisplayChannel *display, const SpiceRect *area, 
      * newer item then 'last' in one of the surfaces that
      * display_channel_draw is called for, Otherwise, 'now' would have
      * already been rendered.  See the call for
-     * red_handle_depends_on_target_surface in red_process_draw
+     * draw_depend_on_me in red_process_draw
      */
     draw_until(display, surface, last);
     surface_update_dest(surface, area);
@@ -1388,6 +1388,71 @@ void display_channel_draw(DisplayChannel *display, const SpiceRect *area, int su
 
     draw_until(display, surface, last);
     surface_update_dest(surface, area);
+}
+
+static void clear_surface_drawables_from_pipes(DisplayChannel *display, int surface_id,
+                                               int wait_if_used)
+{
+    RingItem *item, *next;
+    DisplayChannelClient *dcc;
+
+    FOREACH_DCC(display, item, next, dcc) {
+        if (!dcc_clear_surface_drawables_from_pipe(dcc, surface_id, wait_if_used)) {
+            red_channel_client_disconnect(RED_CHANNEL_CLIENT(dcc));
+        }
+    }
+}
+
+/* TODO: cleanup/refactor destroy functions */
+void display_channel_destroy_surface(DisplayChannel *display, uint32_t surface_id)
+{
+    draw_depend_on_me(display, surface_id);
+    /* note that draw_depend_on_me must be called before current_remove_all.
+       otherwise "current" will hold items that other drawables may depend on, and then
+       current_remove_all will remove them from the pipe. */
+    current_remove_all(display, surface_id);
+    clear_surface_drawables_from_pipes(display, surface_id, FALSE);
+    display_channel_surface_unref(display, surface_id);
+}
+
+void display_channel_destroy_surface_wait(DisplayChannel *display, uint32_t surface_id)
+{
+    if (!display->surfaces[surface_id].context.canvas)
+        return;
+
+    draw_depend_on_me(display, surface_id);
+    /* note that draw_depend_on_me must be called before current_remove_all.
+       otherwise "current" will hold items that other drawables may depend on, and then
+       current_remove_all will remove them from the pipe. */
+    current_remove_all(display, surface_id);
+    clear_surface_drawables_from_pipes(display, surface_id, TRUE);
+}
+
+/* called upon device reset */
+/* TODO: split me*/
+void display_channel_destroy_surfaces(DisplayChannel *display)
+{
+    int i;
+
+    spice_debug(NULL);
+    //to handle better
+    for (i = 0; i < NUM_SURFACES; ++i) {
+        if (display->surfaces[i].context.canvas) {
+            display_channel_destroy_surface_wait(display, i);
+            if (display->surfaces[i].context.canvas) {
+                display_channel_surface_unref(display, i);
+            }
+            spice_assert(!display->surfaces[i].context.canvas);
+        }
+    }
+    spice_warn_if_fail(ring_is_empty(&display->streams));
+
+    if (red_channel_is_connected(RED_CHANNEL(display))) {
+        red_channel_pipes_add_type(RED_CHANNEL(display), PIPE_ITEM_TYPE_INVAL_PALLET_CACHE);
+        red_pipes_add_verb(RED_CHANNEL(display), SPICE_MSG_DISPLAY_STREAM_DESTROY_ALL);
+    }
+
+    display_channel_free_glz_drawables(display);
 }
 
 static void on_disconnect(RedChannelClient *rcc)
