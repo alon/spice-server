@@ -1287,6 +1287,30 @@ static void draw_until(DisplayChannel *display, RedSurface *surface, Drawable *l
     } while (now != last);
 }
 
+static Drawable* current_find_intersects_rect(Ring *current, const SpiceRect *area)
+{
+    Ring *ring;
+    RingItem *ring_item;
+    QRegion rgn;
+    Drawable *last = NULL, *now;
+
+    ring = current;
+    ring_item = ring;
+    region_init(&rgn);
+    region_add(&rgn, area);
+
+    while ((ring_item = ring_next(ring, ring_item))) {
+        now = SPICE_CONTAINEROF(ring_item, Drawable, surface_list_link);
+        if (region_intersects(&rgn, &now->tree_item.base.rgn)) {
+            last = now;
+            break;
+        }
+    }
+
+    region_destroy(&rgn);
+    return last;
+}
+
 /*
  * Renders drawables for updating the requested area, but only drawables that are older
  * than 'last' (exclusive).
@@ -1364,10 +1388,8 @@ void display_channel_draw_till(DisplayChannel *display, const SpiceRect *area, i
 void display_channel_draw(DisplayChannel *display, const SpiceRect *area, int surface_id)
 {
     RedSurface *surface;
-    Ring *ring;
-    RingItem *ring_item;
-    QRegion rgn;
-    Drawable *last, *now;
+    Drawable *last;
+
     spice_debug("surface %d: area ==>", surface_id);
     rect_debug(area);
 
@@ -1378,23 +1400,10 @@ void display_channel_draw(DisplayChannel *display, const SpiceRect *area, int su
 
     surface = &display->surfaces[surface_id];
 
-    last = NULL;
-    ring = &surface->current_list;
-    ring_item = ring;
+    last = current_find_intersects_rect(&surface->current_list, area);
+    if (!last)
+        return;
 
-    region_init(&rgn);
-    region_add(&rgn, area);
-    while ((ring_item = ring_next(ring, ring_item))) {
-        now = SPICE_CONTAINEROF(ring_item, Drawable, surface_list_link);
-        if (region_intersects(&rgn, &now->tree_item.base.rgn)) {
-            last = now;
-            break;
-        }
-    }
-    region_destroy(&rgn);
-
-    if (last)
-        draw_until(display, surface, last);
-
+    draw_until(display, surface, last);
     surface_update_dest(surface, area);
 }
