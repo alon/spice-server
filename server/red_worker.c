@@ -72,8 +72,6 @@
 #define CMD_RING_POLL_TIMEOUT 10 //milli
 #define CMD_RING_POLL_RETRIES 200
 
-#define DISPLAY_CLIENT_SHORT_TIMEOUT 15000000000ULL //nano
-
 #define MAX_EVENT_SOURCES 20
 
 #define MAX_PIPE_SIZE 50
@@ -306,101 +304,6 @@ void current_remove_all(DisplayChannel *display, int surface_id)
     }
 }
 
-/*
- * Return: TRUE if wait_if_used == FALSE, or otherwise, if all of the pipe items that
- * are related to the surface have been cleared (or sent) from the pipe.
- */
-static int red_clear_surface_drawables_from_pipe(DisplayChannelClient *dcc, int surface_id,
-                                                 int wait_if_used)
-{
-    Ring *ring;
-    PipeItem *item;
-    int x;
-    RedChannelClient *rcc;
-
-    if (!dcc) {
-        return TRUE;
-    }
-
-    /* removing the newest drawables that their destination is surface_id and
-       no other drawable depends on them */
-
-    rcc = RED_CHANNEL_CLIENT(dcc);
-    ring = &rcc->pipe;
-    item = (PipeItem *) ring;
-    while ((item = (PipeItem *)ring_next(ring, (RingItem *)item))) {
-        Drawable *drawable;
-        DrawablePipeItem *dpi = NULL;
-        int depend_found = FALSE;
-
-        if (item->type == PIPE_ITEM_TYPE_DRAW) {
-            dpi = SPICE_CONTAINEROF(item, DrawablePipeItem, dpi_pipe_item);
-            drawable = dpi->drawable;
-        } else if (item->type == PIPE_ITEM_TYPE_UPGRADE) {
-            drawable = ((UpgradeItem *)item)->drawable;
-        } else {
-            continue;
-        }
-
-        if (drawable->surface_id == surface_id) {
-            PipeItem *tmp_item = item;
-            item = (PipeItem *)ring_prev(ring, (RingItem *)item);
-            red_channel_client_pipe_remove_and_release(rcc, tmp_item);
-            if (!item) {
-                item = (PipeItem *)ring;
-            }
-            continue;
-        }
-
-        for (x = 0; x < 3; ++x) {
-            if (drawable->surface_deps[x] == surface_id) {
-                depend_found = TRUE;
-                break;
-            }
-        }
-
-        if (depend_found) {
-            spice_debug("surface %d dependent item found %p, %p", surface_id, drawable, item);
-            if (wait_if_used) {
-                break;
-            } else {
-                return TRUE;
-            }
-        }
-    }
-
-    if (!wait_if_used) {
-        return TRUE;
-    }
-
-    if (item) {
-        return red_channel_client_wait_pipe_item_sent(RED_CHANNEL_CLIENT(dcc), item,
-                                                      DISPLAY_CLIENT_TIMEOUT);
-    } else {
-        /*
-         * in case that the pipe didn't contain any item that is dependent on the surface, but
-         * there is one during sending. Use a shorter timeout, since it is just one item
-         */
-        return red_channel_client_wait_outgoing_item(RED_CHANNEL_CLIENT(dcc),
-                                                     DISPLAY_CLIENT_SHORT_TIMEOUT);
-    }
-    return TRUE;
-}
-
-static void red_clear_surface_drawables_from_pipes(DisplayChannel *display,
-                                                   int surface_id,
-                                                   int wait_if_used)
-{
-    RingItem *item, *next;
-    DisplayChannelClient *dcc;
-
-    FOREACH_DCC(display, item, next, dcc) {
-        if (!red_clear_surface_drawables_from_pipe(dcc, surface_id, wait_if_used)) {
-            red_channel_client_disconnect(RED_CHANNEL_CLIENT(dcc));
-        }
-    }
-}
-
 static int red_display_drawable_is_in_pipe(DisplayChannelClient *dcc, Drawable *drawable)
 {
     DrawablePipeItem *dpi;
@@ -621,23 +524,6 @@ static inline int red_handle_self_bitmap(RedWorker *worker, Drawable *drawable)
     return TRUE;
 }
 
-static inline int red_handle_depends_on_target_surface(DisplayChannel *display, uint32_t surface_id)
-{
-    RedSurface *surface;
-    RingItem *ring_item;
-
-    surface = &display->surfaces[surface_id];
-
-    while ((ring_item = ring_get_tail(&surface->depend_on_me))) {
-        Drawable *drawable;
-        DependItem *depended_item = SPICE_CONTAINEROF(ring_item, DependItem, ring_item);
-        drawable = depended_item->drawable;
-        display_channel_draw(display, &drawable->red_drawable->bbox, drawable->surface_id);
-    }
-
-    return TRUE;
-}
-
 static inline void add_to_surface_dependency(DisplayChannel *display, int depend_on_surface_id,
                                              DependItem *depend_item, Drawable *drawable)
 {
@@ -761,9 +647,7 @@ static gboolean red_process_draw(RedWorker *worker, QXLCommandExt *ext_cmd)
         goto end;
     }
 
-    if (!red_handle_depends_on_target_surface(worker->display_channel, surface_id)) {
-        goto end;
-    }
+    draw_depend_on_me(worker->display_channel, surface_id);
 
     if (!red_handle_surfaces_dependencies(worker->display_channel, drawable)) {
         goto end;
@@ -815,16 +699,10 @@ static inline void red_process_surface(RedWorker *worker, RedSurfaceCmd *surface
     case QXL_SURFACE_CMD_DESTROY:
         spice_warn_if(!red_surface->context.canvas);
         display_channel_set_surface_release_info(display, surface_id, 0, surface->release_info, group_id);
-        red_handle_depends_on_target_surface(display, surface_id);
-        /* note that red_handle_depends_on_target_surface must be called before current_remove_all.
-           otherwise "current" will hold items that other drawables may depend on, and then
-           current_remove_all will remove them from the pipe. */
-        current_remove_all(display, surface_id);
-        red_clear_surface_drawables_from_pipes(display, surface_id, FALSE);
-        display_channel_surface_unref(display, surface_id);
+        display_channel_destroy_surface(display, surface_id);
         break;
     default:
-            spice_error("unknown surface command");
+        spice_warn_if_reached();
     };
     red_put_surface_cmd(surface);
     free(surface);
@@ -4150,19 +4028,6 @@ static void handle_dev_del_memslot(void *opaque, uint32_t message_type, void *pa
     red_memslot_info_del_slot(&worker->mem_slots, slot_group_id, slot_id);
 }
 
-void display_channel_destroy_surface_wait(DisplayChannel *display, int surface_id)
-{
-    if (!display->surfaces[surface_id].context.canvas)
-        return;
-
-    red_handle_depends_on_target_surface(display, surface_id);
-    /* note that red_handle_depends_on_target_surface must be called before current_remove_all.
-       otherwise "current" will hold items that other drawables may depend on, and then
-       current_remove_all will remove them from the pipe. */
-    current_remove_all(display, surface_id);
-    red_clear_surface_drawables_from_pipes(display, surface_id, TRUE);
-}
-
 static void handle_dev_destroy_surface_wait(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageDestroySurfaceWait *msg = payload;
@@ -4172,34 +4037,6 @@ static void handle_dev_destroy_surface_wait(void *opaque, uint32_t message_type,
 
     flush_all_qxl_commands(worker);
     display_channel_destroy_surface_wait(worker->display_channel, msg->surface_id);
-}
-
-/* called upon device reset */
-
-/* TODO: split me*/
-void display_channel_destroy_surfaces(DisplayChannel *display)
-{
-    int i;
-
-    spice_debug(NULL);
-    //to handle better
-    for (i = 0; i < NUM_SURFACES; ++i) {
-        if (display->surfaces[i].context.canvas) {
-            display_channel_destroy_surface_wait(display, i);
-            if (display->surfaces[i].context.canvas) {
-                display_channel_surface_unref(display, i);
-            }
-            spice_assert(!display->surfaces[i].context.canvas);
-        }
-    }
-    spice_warn_if_fail(ring_is_empty(&display->streams));
-
-    if (red_channel_is_connected(RED_CHANNEL(display))) {
-        red_channel_pipes_add_type(RED_CHANNEL(display), PIPE_ITEM_TYPE_INVAL_PALLET_CACHE);
-        red_pipes_add_verb(RED_CHANNEL(display), SPICE_MSG_DISPLAY_STREAM_DESTROY_ALL);
-    }
-
-    display_channel_free_glz_drawables(display);
 }
 
 static void handle_dev_destroy_surfaces(void *opaque, uint32_t message_type, void *payload)
@@ -4771,6 +4608,7 @@ static void worker_dispatcher_register(RedWorker *worker, Dispatcher *dispatcher
     dispatcher_register_async_done_callback(dispatcher,
                                             worker_handle_dispatcher_async_done);
 
+    /* TODO: register cursor & display specific msg in respective channel files */
     dispatcher_register_handler(dispatcher,
                                 RED_WORKER_MESSAGE_DISPLAY_CONNECT,
                                 handle_dev_display_connect,

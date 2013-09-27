@@ -180,6 +180,8 @@ void                       dcc_release_item                          (DisplayCha
                                                                       int item_pushed);
 void                       dcc_send_item                             (DisplayChannelClient *dcc,
                                                                       PipeItem *item);
+int                        dcc_clear_surface_drawables_from_pipe     (DisplayChannelClient *dcc,
+                                                                      int surface_id, int force);
 
 typedef struct compress_send_data_t {
     void*    comp_buf;

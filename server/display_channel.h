@@ -271,6 +271,11 @@ int                        display_channel_wait_for_migrate_data     (DisplayCha
 void                       display_channel_flush_all_surfaces        (DisplayChannel *display);
 void                       display_channel_free_glz_drawables_to_free(DisplayChannel *display);
 void                       display_channel_free_glz_drawables        (DisplayChannel *display);
+void                       display_channel_destroy_surface_wait      (DisplayChannel *display,
+                                                                      uint32_t surface_id);
+void                       display_channel_destroy_surfaces          (DisplayChannel *display);
+void                       display_channel_destroy_surface           (DisplayChannel *display,
+                                                                      uint32_t surface_id);
 
 static inline int validate_surface(DisplayChannel *display, uint32_t surface_id)
 {
@@ -399,6 +404,21 @@ static inline void region_add_clip_rects(QRegion *rgn, SpiceClipRects *data)
 
     for (i = 0; i < data->num_rects; i++) {
         region_add(rgn, data->rects + i);
+    }
+}
+
+static inline void draw_depend_on_me(DisplayChannel *display, uint32_t surface_id)
+{
+    RedSurface *surface;
+    RingItem *ring_item;
+
+    surface = &display->surfaces[surface_id];
+
+    while ((ring_item = ring_get_tail(&surface->depend_on_me))) {
+        Drawable *drawable;
+        DependItem *depended_item = SPICE_CONTAINEROF(ring_item, DependItem, ring_item);
+        drawable = depended_item->drawable;
+        display_channel_draw(display, &drawable->red_drawable->bbox, drawable->surface_id);
     }
 }
 
