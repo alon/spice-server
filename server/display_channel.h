@@ -233,7 +233,9 @@ typedef struct UpgradeItem {
     SpiceClipRects *rects;
 } UpgradeItem;
 
-
+DisplayChannel*            display_channel_new                       (RedWorker *worker,
+                                                                      int migrate,
+                                                                      uint32_t n_surfaces);
 void                       display_channel_draw                      (DisplayChannel *display,
                                                                       const SpiceRect *area,
                                                                       int surface_id);
@@ -269,6 +271,21 @@ int                        display_channel_wait_for_migrate_data     (DisplayCha
 void                       display_channel_flush_all_surfaces        (DisplayChannel *display);
 void                       display_channel_free_glz_drawables_to_free(DisplayChannel *display);
 void                       display_channel_free_glz_drawables        (DisplayChannel *display);
+
+static inline int validate_surface(DisplayChannel *display, uint32_t surface_id)
+{
+    if (surface_id == G_MAXUINT32)
+        return 1;
+
+    spice_warn_if(surface_id >= display->n_surfaces);
+    if (!display->surfaces[surface_id].context.canvas) {
+        spice_warning("canvas address is %p for %d (and is NULL)\n",
+                      &(display->surfaces[surface_id].context.canvas), surface_id);
+        spice_warning("failed on %d", surface_id);
+        return 0;
+    }
+    return 1;
+}
 
 static inline int is_equal_path(SpicePath *path1, SpicePath *path2)
 {

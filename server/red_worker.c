@@ -147,19 +147,12 @@ QXLInstance* red_worker_get_qxl(RedWorker *worker)
     return worker->qxl;
 }
 
-static inline int validate_surface(DisplayChannel *display, uint32_t surface_id)
+void red_worker_update_timeout(RedWorker *worker, gint timeout)
 {
-    if (surface_id == G_MAXUINT32)
-        return 1;
+    spice_return_if_fail(worker != NULL);
+    spice_return_if_fail(timeout >= 0);
 
-    spice_warn_if(surface_id >= display->n_surfaces);
-    if (!display->surfaces[surface_id].context.canvas) {
-        spice_warning("canvas address is %p for %d (and is NULL)\n",
-                   &(display->surfaces[surface_id].context.canvas), surface_id);
-        spice_warning("failed on %d", surface_id);
-        return 0;
-    }
-    return 1;
+    worker->timeout = MIN(worker->timeout, timeout);
 }
 
 static int display_is_connected(RedWorker *worker)
@@ -551,21 +544,6 @@ void detach_streams_behind(DisplayChannel *display, QRegion *region, Drawable *d
     }
 }
 
-static void dcc_destroy_stream_agents(DisplayChannelClient *dcc)
-{
-    int i;
-
-    for (i = 0; i < NUM_STREAMS; i++) {
-        StreamAgent *agent = &dcc->stream_agents[i];
-        region_destroy(&agent->vis_region);
-        region_destroy(&agent->clip);
-        if (agent->mjpeg_encoder) {
-            mjpeg_encoder_destroy(agent->mjpeg_encoder);
-            agent->mjpeg_encoder = NULL;
-        }
-    }
-}
-
 static void red_get_area(DisplayChannel *display, int surface_id, const SpiceRect *area,
                          uint8_t *dest, int dest_stride, int update)
 {
@@ -850,15 +828,6 @@ static inline void red_process_surface(RedWorker *worker, RedSurfaceCmd *surface
     };
     red_put_surface_cmd(surface);
     free(surface);
-}
-
-static SpiceCanvas *image_surfaces_get(SpiceImageSurfaces *surfaces, uint32_t surface_id)
-{
-    DisplayChannel *display = SPICE_CONTAINEROF(surfaces, DisplayChannel, image_surfaces);
-
-    spice_return_val_if_fail(validate_surface(display, surface_id), NULL);
-
-    return display->surfaces[surface_id].context.canvas;
 }
 
 static int red_process_cursor(RedWorker *worker, uint32_t max_pipe_size, int *ring_is_empty)
@@ -1314,13 +1283,6 @@ static void fill_attr(SpiceMarshaller *m, SpiceLineAttr *attr, uint32_t group_id
             spice_marshaller_add_uint32(m, attr->style[i]);
         }
     }
-}
-
-static inline void red_display_reset_send_data(DisplayChannelClient *dcc)
-{
-    dcc->send_data.free_list.res->count = 0;
-    dcc->send_data.num_pixmap_cache_items = 0;
-    memset(dcc->send_data.free_list.sync, 0, sizeof(dcc->send_data.free_list.sync));
 }
 
 /* set area=NULL for testing the whole surface */
@@ -3414,12 +3376,19 @@ static void red_marshall_stream_activate_report(RedChannelClient *rcc,
     spice_marshall_msg_display_stream_activate_report(base_marshaller, &msg);
 }
 
-static void send_item(RedChannelClient *rcc, PipeItem *pipe_item)
+static void reset_send_data(DisplayChannelClient *dcc)
 {
-    SpiceMarshaller *m = red_channel_client_get_marshaller(rcc);
-    DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
+    dcc->send_data.free_list.res->count = 0;
+    dcc->send_data.num_pixmap_cache_items = 0;
+    memset(dcc->send_data.free_list.sync, 0, sizeof(dcc->send_data.free_list.sync));
+}
 
-    red_display_reset_send_data(dcc);
+void dcc_send_item(DisplayChannelClient *dcc, PipeItem *pipe_item)
+{
+    RedChannelClient *rcc = RED_CHANNEL_CLIENT(dcc);
+    SpiceMarshaller *m = red_channel_client_get_marshaller(rcc);
+
+    reset_send_data(dcc);
     switch (pipe_item->type) {
     case PIPE_ITEM_TYPE_DRAW: {
         DrawablePipeItem *dpi = SPICE_CONTAINEROF(pipe_item, DrawablePipeItem, dpi_pipe_item);
@@ -3508,38 +3477,6 @@ static inline void red_push(RedWorker *worker)
     if (worker->display_channel) {
         red_channel_push(RED_CHANNEL(worker->display_channel));
     }
-}
-
-static void on_disconnect(RedChannelClient *rcc)
-{
-    DisplayChannel *display;
-    DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
-    CommonChannel *common;
-    RedWorker *worker;
-
-    if (!rcc) {
-        return;
-    }
-    spice_info(NULL);
-    common = SPICE_CONTAINEROF(rcc->channel, CommonChannel, base);
-    worker = common->worker;
-    display = (DisplayChannel *)rcc->channel;
-    spice_assert(display == worker->display_channel);
-    display_channel_compress_stats_print(display);
-    pixmap_cache_unref(dcc->pixmap_cache);
-    dcc->pixmap_cache = NULL;
-    dcc_release_glz(dcc);
-    dcc_palette_cache_reset(dcc);
-    free(dcc->send_data.stream_outbuf);
-    free(dcc->send_data.free_list.res);
-    dcc_destroy_stream_agents(dcc);
-
-    // this was the last channel client
-#if FIXME
-    spice_debug("#draw=%d, #red_draw=%d, #glz_draw=%d",
-                display->drawable_count, worker->red_drawable_count,
-                worker->glz_drawable_count);
-#endif
 }
 
 void red_disconnect_all_display_TODO_remove_me(RedChannel *channel)
@@ -3782,29 +3719,6 @@ static inline void flush_all_qxl_commands(RedWorker *worker)
 {
     flush_display_commands(worker);
     flush_cursor_commands(worker);
-}
-
-static int handle_migrate_flush_mark(RedChannelClient *rcc)
-{
-    DisplayChannel *display_channel = SPICE_CONTAINEROF(rcc->channel, DisplayChannel, common.base);
-    RedChannel *channel = RED_CHANNEL(display_channel);
-
-    red_channel_pipes_add_type(channel, PIPE_ITEM_TYPE_MIGRATE_DATA);
-    return TRUE;
-}
-
-static uint64_t handle_migrate_data_get_serial(RedChannelClient *rcc, uint32_t size, void *message)
-{
-    SpiceMigrateDataDisplay *migrate_data;
-
-    migrate_data = (SpiceMigrateDataDisplay *)((uint8_t *)message + sizeof(SpiceMigrateDataHeader));
-
-    return migrate_data->message_serial;
-}
-
-static int handle_migrate_data(RedChannelClient *rcc, uint32_t size, void *message)
-{
-    return dcc_handle_migrate_data(RCC_TO_DCC(rcc), size, message);
 }
 
 static int common_channel_config_socket(RedChannelClient *rcc)
@@ -4067,102 +3981,6 @@ RedChannel *red_worker_new_channel(RedWorker *worker, int size,
     common = (CommonChannel *)channel;
     common->worker = worker;
     return channel;
-}
-
-static void hold_item(RedChannelClient *rcc, PipeItem *item)
-{
-    spice_assert(item);
-    switch (item->type) {
-    case PIPE_ITEM_TYPE_DRAW:
-        drawable_pipe_item_ref(SPICE_CONTAINEROF(item, DrawablePipeItem, dpi_pipe_item));
-        break;
-    case PIPE_ITEM_TYPE_STREAM_CLIP:
-        ((StreamClipItem *)item)->refs++;
-        break;
-    case PIPE_ITEM_TYPE_UPGRADE:
-        ((UpgradeItem *)item)->refs++;
-        break;
-    case PIPE_ITEM_TYPE_IMAGE:
-        ((ImageItem *)item)->refs++;
-        break;
-    default:
-        spice_critical("invalid item type");
-    }
-}
-
-static void release_item(RedChannelClient *rcc, PipeItem *item, int item_pushed)
-{
-    DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
-    RedWorker *worker = DCC_TO_WORKER(dcc);
-
-    spice_return_if_fail(item != NULL);
-    dcc_release_item(dcc, item, item_pushed);
-    worker->timeout = 0;
-}
-
-static void image_surface_init(DisplayChannel *display)
-{
-    static SpiceImageSurfacesOps image_surfaces_ops = {
-        image_surfaces_get,
-    };
-
-    display->image_surfaces.ops = &image_surfaces_ops;
-}
-
-static void display_channel_create(RedWorker *worker, int migrate, uint32_t n_surfaces)
-{
-    DisplayChannel *display_channel;
-    ChannelCbs cbs = {
-        .on_disconnect = on_disconnect,
-        .send_item = send_item,
-        .hold_item = hold_item,
-        .release_item = release_item,
-        .handle_migrate_flush_mark = handle_migrate_flush_mark,
-        .handle_migrate_data = handle_migrate_data,
-        .handle_migrate_data_get_serial = handle_migrate_data_get_serial
-    };
-
-    spice_return_if_fail(num_renderers > 0);
-
-    spice_info("create display channel");
-    if (!(display_channel = (DisplayChannel *)red_worker_new_channel(
-            worker, sizeof(*display_channel), "display_channel",
-            SPICE_CHANNEL_DISPLAY,
-            SPICE_MIGRATE_NEED_FLUSH | SPICE_MIGRATE_NEED_DATA_TRANSFER,
-            &cbs, dcc_handle_message))) {
-        spice_warning("failed to create display channel");
-        return;
-    }
-    worker->display_channel = display_channel;
-    stat_init(&display_channel->add_stat, "add", worker->clockid);
-    stat_init(&display_channel->exclude_stat, "exclude", worker->clockid);
-    stat_init(&display_channel->__exclude_stat, "__exclude", worker->clockid);
-#ifdef RED_STATISTICS
-    RedChannel *channel = RED_CHANNEL(display_channel);
-    display_channel->cache_hits_counter = stat_add_counter(channel->stat,
-                                                           "cache_hits", TRUE);
-    display_channel->add_to_cache_counter = stat_add_counter(channel->stat,
-                                                             "add_to_cache", TRUE);
-    display_channel->non_cache_counter = stat_add_counter(channel->stat,
-                                                          "non_cache", TRUE);
-#endif
-    stat_compress_init(&display_channel->lz_stat, "lz");
-    stat_compress_init(&display_channel->glz_stat, "glz");
-    stat_compress_init(&display_channel->quic_stat, "quic");
-    stat_compress_init(&display_channel->jpeg_stat, "jpeg");
-    stat_compress_init(&display_channel->zlib_glz_stat, "zlib");
-    stat_compress_init(&display_channel->jpeg_alpha_stat, "jpeg_alpha");
-
-    display_channel->n_surfaces = n_surfaces;
-    display_channel->num_renderers = num_renderers;
-    memcpy(display_channel->renderers, renderers, sizeof(display_channel->renderers));
-    display_channel->renderer = RED_RENDERER_INVALID;
-
-    ring_init(&display_channel->current_list);
-    image_surface_init(display_channel);
-    drawables_init(display_channel);
-    image_cache_init(&display_channel->image_cache);
-    stream_init(display_channel);
 }
 
 static void guest_set_client_capabilities(RedWorker *worker)
@@ -5261,7 +5079,7 @@ RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher)
 
     worker->cursor_channel = cursor_channel_new(worker);
     // TODO: handle seemless migration. Temp, setting migrate to FALSE
-    display_channel_create(worker, FALSE, init_info.n_surfaces);
+    worker->display_channel = display_channel_new(worker, FALSE, init_info.n_surfaces);
 
     worker->wait_for_clients = !g_getenv("SPICE_NOWAIT_CLIENTS");
 

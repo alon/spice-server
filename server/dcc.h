@@ -141,6 +141,7 @@ DisplayChannelClient*      dcc_new                                   (DisplayCha
                                                                       spice_wan_compression_t jpeg_state,
                                                                       spice_wan_compression_t zlib_glz_state);
 void                       dcc_start                                 (DisplayChannelClient *dcc);
+void                       dcc_stop                                  (DisplayChannelClient *dcc);
 int                        dcc_handle_message                        (RedChannelClient *rcc,
                                                                       uint32_t size,
                                                                       uint16_t type, void *msg);
@@ -177,6 +178,8 @@ void                       dcc_add_drawable_after                    (DisplayCha
 void                       dcc_release_item                          (DisplayChannelClient *dcc,
                                                                       PipeItem *item,
                                                                       int item_pushed);
+void                       dcc_send_item                             (DisplayChannelClient *dcc,
+                                                                      PipeItem *item);
 
 typedef struct compress_send_data_t {
     void*    comp_buf;

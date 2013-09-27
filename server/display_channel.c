@@ -1389,3 +1389,155 @@ void display_channel_draw(DisplayChannel *display, const SpiceRect *area, int su
     draw_until(display, surface, last);
     surface_update_dest(surface, area);
 }
+
+static void on_disconnect(RedChannelClient *rcc)
+{
+    DisplayChannel *display;
+    DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
+    RedWorker *worker;
+
+    spice_info(NULL);
+    spice_return_if_fail(rcc != NULL);
+
+    display = DCC_TO_DC(dcc);
+    worker = COMMON_CHANNEL(display)->worker;
+    spice_return_if_fail(rcc->channel == red_worker_get_display_channel(worker));
+
+    dcc_stop(dcc); // TODO: start/stop -> connect/disconnect?
+    display_channel_compress_stats_print(display);
+
+    // this was the last channel client
+#if FIXME
+    spice_debug("#draw=%d, #red_draw=%d, #glz_draw=%d",
+                display->drawable_count, worker->red_drawable_count,
+                worker->glz_drawable_count);
+#endif
+}
+
+static void send_item(RedChannelClient *rcc, PipeItem *item)
+{
+    dcc_send_item(RCC_TO_DCC(rcc), item);
+}
+
+static void hold_item(RedChannelClient *rcc, PipeItem *item)
+{
+    spice_return_if_fail(item);
+
+    switch (item->type) {
+    case PIPE_ITEM_TYPE_DRAW:
+        drawable_pipe_item_ref(SPICE_CONTAINEROF(item, DrawablePipeItem, dpi_pipe_item));
+        break;
+    case PIPE_ITEM_TYPE_STREAM_CLIP:
+        ((StreamClipItem *)item)->refs++;
+        break;
+    case PIPE_ITEM_TYPE_UPGRADE:
+        ((UpgradeItem *)item)->refs++;
+        break;
+    case PIPE_ITEM_TYPE_IMAGE:
+        ((ImageItem *)item)->refs++;
+        break;
+    default:
+        spice_warn_if_reached();
+    }
+}
+
+static void release_item(RedChannelClient *rcc, PipeItem *item, int item_pushed)
+{
+    DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
+    RedWorker *worker = DCC_TO_WORKER(dcc);
+
+    spice_return_if_fail(item != NULL);
+    dcc_release_item(dcc, item, item_pushed);
+    red_worker_update_timeout(worker, 0);
+}
+
+static int handle_migrate_flush_mark(RedChannelClient *rcc)
+{
+    DisplayChannel *display_channel = SPICE_CONTAINEROF(rcc->channel, DisplayChannel, common.base);
+    RedChannel *channel = RED_CHANNEL(display_channel);
+
+    red_channel_pipes_add_type(channel, PIPE_ITEM_TYPE_MIGRATE_DATA);
+    return TRUE;
+}
+
+static uint64_t handle_migrate_data_get_serial(RedChannelClient *rcc, uint32_t size, void *message)
+{
+    SpiceMigrateDataDisplay *migrate_data;
+
+    migrate_data = (SpiceMigrateDataDisplay *)((uint8_t *)message + sizeof(SpiceMigrateDataHeader));
+
+    return migrate_data->message_serial;
+}
+
+static int handle_migrate_data(RedChannelClient *rcc, uint32_t size, void *message)
+{
+    return dcc_handle_migrate_data(RCC_TO_DCC(rcc), size, message);
+}
+
+static SpiceCanvas *image_surfaces_get(SpiceImageSurfaces *surfaces, uint32_t surface_id)
+{
+    DisplayChannel *display = SPICE_CONTAINEROF(surfaces, DisplayChannel, image_surfaces);
+
+    spice_return_val_if_fail(validate_surface(display, surface_id), NULL);
+
+    return display->surfaces[surface_id].context.canvas;
+}
+
+DisplayChannel* display_channel_new(RedWorker *worker, int migrate, uint32_t n_surfaces)
+{
+    DisplayChannel *display;
+    ChannelCbs cbs = {
+        .on_disconnect = on_disconnect,
+        .send_item = send_item,
+        .hold_item = hold_item,
+        .release_item = release_item,
+        .handle_migrate_flush_mark = handle_migrate_flush_mark,
+        .handle_migrate_data = handle_migrate_data,
+        .handle_migrate_data_get_serial = handle_migrate_data_get_serial
+    };
+    static SpiceImageSurfacesOps image_surfaces_ops = {
+        image_surfaces_get,
+    };
+
+    spice_return_val_if_fail(num_renderers > 0, NULL);
+
+    spice_info("create display channel");
+    display = (DisplayChannel *)red_worker_new_channel(
+        worker, sizeof(*display), "display_channel",
+        SPICE_CHANNEL_DISPLAY,
+        SPICE_MIGRATE_NEED_FLUSH | SPICE_MIGRATE_NEED_DATA_TRANSFER,
+        &cbs, dcc_handle_message);
+    spice_return_val_if_fail(display, NULL);
+
+    stat_init(&display->add_stat, "add", red_worker_get_clockid(worker));
+    stat_init(&display->exclude_stat, "exclude", red_worker_get_clockid(worker));
+    stat_init(&display->__exclude_stat, "__exclude", red_worker_get_clockid(worker));
+#ifdef RED_STATISTICS
+    RedChannel *channel = RED_CHANNEL(display);
+    display->cache_hits_counter = stat_add_counter(channel->stat,
+                                                           "cache_hits", TRUE);
+    display->add_to_cache_counter = stat_add_counter(channel->stat,
+                                                             "add_to_cache", TRUE);
+    display->non_cache_counter = stat_add_counter(channel->stat,
+                                                          "non_cache", TRUE);
+#endif
+    stat_compress_init(&display->lz_stat, "lz");
+    stat_compress_init(&display->glz_stat, "glz");
+    stat_compress_init(&display->quic_stat, "quic");
+    stat_compress_init(&display->jpeg_stat, "jpeg");
+    stat_compress_init(&display->zlib_glz_stat, "zlib");
+    stat_compress_init(&display->jpeg_alpha_stat, "jpeg_alpha");
+
+    display->n_surfaces = n_surfaces;
+    display->num_renderers = num_renderers;
+    memcpy(display->renderers, renderers, sizeof(display->renderers));
+    display->renderer = RED_RENDERER_INVALID;
+
+    ring_init(&display->current_list);
+    display->image_surfaces.ops = &image_surfaces_ops;
+    drawables_init(display);
+    image_cache_init(&display->image_cache);
+    stream_init(display);
+
+    return display;
+}

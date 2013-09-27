@@ -335,6 +335,31 @@ void dcc_start(DisplayChannelClient *dcc)
     }
 }
 
+static void dcc_destroy_stream_agents(DisplayChannelClient *dcc)
+{
+    int i;
+
+    for (i = 0; i < NUM_STREAMS; i++) {
+        StreamAgent *agent = &dcc->stream_agents[i];
+        region_destroy(&agent->vis_region);
+        region_destroy(&agent->clip);
+        if (agent->mjpeg_encoder) {
+            mjpeg_encoder_destroy(agent->mjpeg_encoder);
+            agent->mjpeg_encoder = NULL;
+        }
+    }
+}
+
+void dcc_stop(DisplayChannelClient *dcc)
+{
+    pixmap_cache_unref(dcc->pixmap_cache);
+    dcc->pixmap_cache = NULL;
+    dcc_release_glz(dcc);
+    dcc_palette_cache_reset(dcc);
+    free(dcc->send_data.stream_outbuf);
+    free(dcc->send_data.free_list.res);
+    dcc_destroy_stream_agents(dcc);
+}
 
 void dcc_stream_agent_clip(DisplayChannelClient* dcc, StreamAgent *agent)
 {
