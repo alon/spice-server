@@ -677,10 +677,6 @@ static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *
                                    &update, ext_cmd.cmd.data)) {
                 break;
             }
-            if (!validate_surface(worker->display_channel, update.surface_id)) {
-                spice_warning("Invalid surface in QXL_CMD_UPDATE");
-                break;
-            }
             display_channel_draw(worker->display_channel, &update.area, update.surface_id);
             worker->qxl->st->qif->notify_update(worker->qxl, update.update_id);
             release_info_ext.group_id = ext_cmd.group_id;
