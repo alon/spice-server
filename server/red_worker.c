@@ -91,7 +91,6 @@ typedef struct RedWorker {
     uint32_t cursor_poll_tries;
 
     uint32_t red_drawable_count;
-    uint32_t bits_unique;
     RedMemSlotInfo mem_slots;
 
     spice_image_compression_t image_compression;
@@ -444,138 +443,6 @@ void detach_streams_behind(DisplayChannel *display, QRegion *region, Drawable *d
     }
 }
 
-static void red_get_area(DisplayChannel *display, int surface_id, const SpiceRect *area,
-                         uint8_t *dest, int dest_stride, int update)
-{
-    SpiceCanvas *canvas;
-    RedSurface *surface;
-
-    surface = &display->surfaces[surface_id];
-    if (update) {
-        display_channel_draw(display, area, surface_id);
-    }
-
-    canvas = surface->context.canvas;
-    canvas->ops->read_bits(canvas, dest, dest_stride, area);
-}
-
-static inline int red_handle_self_bitmap(RedWorker *worker, Drawable *drawable)
-{
-    DisplayChannel *display = worker->display_channel;
-    SpiceImage *image;
-    int32_t width;
-    int32_t height;
-    uint8_t *dest;
-    int dest_stride;
-    RedSurface *surface;
-    int bpp;
-    int all_set;
-    RedDrawable *red_drawable = drawable->red_drawable;
-
-    if (!red_drawable->self_bitmap) {
-        return TRUE;
-    }
-
-    surface = &display->surfaces[drawable->surface_id];
-
-    bpp = SPICE_SURFACE_FMT_DEPTH(surface->context.format) / 8;
-
-    width = red_drawable->self_bitmap_area.right
-            - red_drawable->self_bitmap_area.left;
-    height = red_drawable->self_bitmap_area.bottom
-            - red_drawable->self_bitmap_area.top;
-    dest_stride = SPICE_ALIGN(width * bpp, 4);
-
-    image = spice_new0(SpiceImage, 1);
-    image->descriptor.type = SPICE_IMAGE_TYPE_BITMAP;
-    image->descriptor.flags = 0;
-
-    QXL_SET_IMAGE_ID(image, QXL_IMAGE_GROUP_RED, ++worker->bits_unique);
-    image->u.bitmap.flags = surface->context.top_down ? SPICE_BITMAP_FLAGS_TOP_DOWN : 0;
-    image->u.bitmap.format = spice_bitmap_from_surface_type(surface->context.format);
-    image->u.bitmap.stride = dest_stride;
-    image->descriptor.width = image->u.bitmap.x = width;
-    image->descriptor.height = image->u.bitmap.y = height;
-    image->u.bitmap.palette = NULL;
-
-    dest = (uint8_t *)spice_malloc_n(height, dest_stride);
-    image->u.bitmap.data = spice_chunks_new_linear(dest, height * dest_stride);
-    image->u.bitmap.data->flags |= SPICE_CHUNKS_FLAGS_FREE;
-
-    red_get_area(display, drawable->surface_id,
-                 &red_drawable->self_bitmap_area, dest, dest_stride, TRUE);
-
-    /* For 32bit non-primary surfaces we need to keep any non-zero
-       high bytes as the surface may be used as source to an alpha_blend */
-    if (!is_primary_surface(display, drawable->surface_id) &&
-        image->u.bitmap.format == SPICE_BITMAP_FMT_32BIT &&
-        rgb32_data_has_alpha(width, height, dest_stride, dest, &all_set)) {
-        if (all_set) {
-            image->descriptor.flags |= SPICE_IMAGE_FLAGS_HIGH_BITS_SET;
-        } else {
-            image->u.bitmap.format = SPICE_BITMAP_FMT_RGBA;
-        }
-    }
-
-    red_drawable->self_bitmap_image = image;
-    return TRUE;
-}
-
-static inline void add_to_surface_dependency(DisplayChannel *display, int depend_on_surface_id,
-                                             DependItem *depend_item, Drawable *drawable)
-{
-    RedSurface *surface;
-
-    if (depend_on_surface_id == -1) {
-        depend_item->drawable = NULL;
-        return;
-    }
-
-    surface = &display->surfaces[depend_on_surface_id];
-
-    depend_item->drawable = drawable;
-    ring_add(&surface->depend_on_me, &depend_item->ring_item);
-}
-
-static inline int red_handle_surfaces_dependencies(DisplayChannel *display, Drawable *drawable)
-{
-    int x;
-
-    for (x = 0; x < 3; ++x) {
-        // surface self dependency is handled by shadows in "current", or by
-        // handle_self_bitmap
-        if (drawable->surface_deps[x] != drawable->surface_id) {
-            add_to_surface_dependency(display, drawable->surface_deps[x],
-                                      &drawable->depend_items[x], drawable);
-
-            if (drawable->surface_deps[x] == 0) {
-                QRegion depend_region;
-                region_init(&depend_region);
-                region_add(&depend_region, &drawable->red_drawable->surfaces_rects[x]);
-                detach_streams_behind(display, &depend_region, NULL);
-            }
-        }
-    }
-
-    return TRUE;
-}
-
-static inline void red_inc_surfaces_drawable_dependencies(DisplayChannel *display, Drawable *drawable)
-{
-    int x;
-    int surface_id;
-    RedSurface *surface;
-
-    for (x = 0; x < 3; ++x) {
-        surface_id = drawable->surface_deps[x];
-        if (surface_id == -1) {
-            continue;
-        }
-        surface = &display->surfaces[surface_id];
-        surface->refs++;
-    }
-}
-
 static RedDrawable *red_drawable_new(void)
 {
     RedDrawable * red = spice_new0(RedDrawable, 1);
@@ -584,13 +451,12 @@ static RedDrawable *red_drawable_new(void)
     return red;
 }
 
-static gboolean red_process_draw(RedWorker *worker, QXLCommandExt *ext_cmd)
+static bool red_process_draw(RedWorker *worker, QXLCommandExt *ext_cmd)
 {
     DisplayChannel *display = worker->display_channel;
     RedDrawable *red_drawable = NULL;
     Drawable *drawable = NULL;
-    int surface_id, x;
-    gboolean success = FALSE;
+    bool success = FALSE;
 
     drawable = display_channel_drawable_try_new(display, ext_cmd->group_id,
                                                 worker->process_commands_generation);
@@ -604,54 +470,8 @@ static gboolean red_process_draw(RedWorker *worker, QXLCommandExt *ext_cmd)
                          red_drawable, ext_cmd->cmd.data, ext_cmd->flags) != 0)
         goto end;
 
-    drawable->tree_item.effect = red_drawable->effect;
-    drawable->red_drawable = red_drawable_ref(red_drawable);
-    drawable->surface_id = red_drawable->surface_id;
-    region_add(&drawable->tree_item.base.rgn, &red_drawable->bbox);
-    if (red_drawable->clip.type == SPICE_CLIP_TYPE_RECTS) {
-        QRegion rgn;
-
-        region_init(&rgn);
-        region_add_clip_rects(&rgn, red_drawable->clip.rects);
-        region_and(&drawable->tree_item.base.rgn, &rgn);
-        region_destroy(&rgn);
-    }
-
-    if (!validate_surface(display, drawable->surface_id))
-        goto end;
-    for (x = 0; x < 3; ++x) {
-        drawable->surface_deps[x] = red_drawable->surface_deps[x];
-        if (!validate_surface(worker->display_channel, drawable->surface_deps[x]))
-            goto end;
-    }
-
-    surface_id = drawable->surface_id;
-    display->surfaces[surface_id].refs++;
-
-    /*
-        surface->refs is affected by a drawable (that is
-        dependent on the surface) as long as the drawable is alive.
-        However, surface->depend_on_me is affected by a drawable only
-        as long as it is in the current tree (hasn't been rendered yet).
-    */
-    red_inc_surfaces_drawable_dependencies(worker->display_channel, drawable);
-
-    if (region_is_empty(&drawable->tree_item.base.rgn)) {
-        goto end;
-    }
-
-    if (!red_handle_self_bitmap(worker, drawable)) {
-        goto end;
-    }
-
-    draw_depend_on_me(worker->display_channel, surface_id);
-
-    if (!red_handle_surfaces_dependencies(worker->display_channel, drawable)) {
-        goto end;
-    }
-
-    display_channel_add_drawable(worker->display_channel, drawable);
-    success = TRUE;
+    success = display_channel_add_drawable(worker->display_channel, drawable, red_drawable);
+    spice_warn_if_fail(success);
 
 end:
     if (drawable != NULL)
@@ -662,8 +482,8 @@ end:
 }
 
 
-static inline void red_process_surface(RedWorker *worker, RedSurfaceCmd *surface,
-                                       uint32_t group_id, int loadvm)
+static void red_process_surface(RedWorker *worker, RedSurfaceCmd *surface,
+                                uint32_t group_id, int loadvm)
 {
     DisplayChannel *display = worker->display_channel;
     int surface_id;
@@ -2958,7 +2778,7 @@ static void display_channel_marshall_reset_cache(RedChannelClient *rcc,
 static void red_marshall_image(RedChannelClient *rcc, SpiceMarshaller *m, ImageItem *item)
 {
     DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
-    DisplayChannel *display_channel = DCC_TO_DC(dcc);
+    DisplayChannel *display = DCC_TO_DC(dcc);
     SpiceImage red_image;
     RedWorker *worker;
     SpiceBitmap bitmap;
@@ -2972,10 +2792,10 @@ static void red_marshall_image(RedChannelClient *rcc, SpiceMarshaller *m, ImageI
     SpiceMarshaller *src_bitmap_out, *mask_bitmap_out;
     SpiceMarshaller *bitmap_palette_out, *lzplt_palette_out;
 
-    spice_assert(rcc && display_channel && item);
-    worker = display_channel->common.worker;
+    spice_assert(rcc && display && item);
+    worker = display->common.worker;
 
-    QXL_SET_IMAGE_ID(&red_image, QXL_IMAGE_GROUP_RED, ++worker->bits_unique);
+    QXL_SET_IMAGE_ID(&red_image, QXL_IMAGE_GROUP_RED, generate_uid(display));
     red_image.descriptor.type = SPICE_IMAGE_TYPE_BITMAP;
     red_image.descriptor.flags = item->image_flags;
     red_image.descriptor.width = item->width;
@@ -3032,7 +2852,7 @@ static void red_marshall_image(RedChannelClient *rcc, SpiceMarshaller *m, ImageI
             grad_level = bitmap_get_graduality_level(&bitmap);
             if (grad_level == BITMAP_GRADUAL_HIGH) {
                 // if we use lz for alpha, the stride can't be extra
-                lossy_comp = display_channel->enable_jpeg && item->can_lossy;
+                lossy_comp = display->enable_jpeg && item->can_lossy;
             } else {
                 lz_comp = TRUE;
             }
