@@ -152,6 +152,7 @@ struct _Drawable {
 
 struct DisplayChannel {
     CommonChannel common; // Must be the first thing
+    uint32_t bits_unique;
 
     MonitorsConfig *monitors_config;
 
@@ -273,8 +274,9 @@ void                       display_channel_set_surface_release_info  (DisplayCha
                                                                       QXLReleaseInfo *info,
                                                                       uint32_t group_id);
 void                       display_channel_show_tree                 (DisplayChannel *display);
-void                       display_channel_add_drawable              (DisplayChannel *display,
-                                                                      Drawable *drawable);
+int                        display_channel_add_drawable              (DisplayChannel *display,
+                                                                      Drawable *drawable,
+                                                                      RedDrawable *red_drawable);
 void                       display_channel_current_flush             (DisplayChannel *display,
                                                                       int surface_id);
 int                        display_channel_wait_for_migrate_data     (DisplayChannel *display);
@@ -286,6 +288,7 @@ void                       display_channel_destroy_surface_wait      (DisplayCha
 void                       display_channel_destroy_surfaces          (DisplayChannel *display);
 void                       display_channel_destroy_surface           (DisplayChannel *display,
                                                                       uint32_t surface_id);
+uint32_t                   display_channel_generate_uid              (DisplayChannel *display);
 
 static inline int validate_surface(DisplayChannel *display, uint32_t surface_id)
 {
@@ -417,21 +420,7 @@ static inline void region_add_clip_rects(QRegion *rgn, SpiceClipRects *data)
     }
 }
 
-static inline void draw_depend_on_me(DisplayChannel *display, uint32_t surface_id)
-{
-    RedSurface *surface;
-    RingItem *ring_item;
-
-    surface = &display->surfaces[surface_id];
-
-    while ((ring_item = ring_get_tail(&surface->depend_on_me))) {
-        Drawable *drawable;
-        DependItem *depended_item = SPICE_CONTAINEROF(ring_item, DependItem, ring_item);
-        drawable = depended_item->drawable;
-        display_channel_draw(display, &drawable->red_drawable->bbox, drawable->surface_id);
-    }
-}
-
+uint32_t generate_uid(DisplayChannel *display);
 void current_remove_drawable(DisplayChannel *display, Drawable *item);
 void red_pipes_remove_drawable(Drawable *drawable);
 void current_remove(DisplayChannel *display, TreeItem *item);
