@@ -157,48 +157,48 @@ typedef uint16_t rgb16_pixel_t;
 #undef ATTR_PACKED
 
 #define LZ_PLT
-#include "glz_decode_tmpl.c"
+#include "glz_decode.c.template"
 
 #define LZ_PLT
 #define PLT8
 #define TO_RGB32
-#include "glz_decode_tmpl.c"
+#include "glz_decode.c.template"
 
 #define LZ_PLT
 #define PLT4_BE
 #define TO_RGB32
-#include "glz_decode_tmpl.c"
+#include "glz_decode.c.template"
 
 #define LZ_PLT
 #define PLT4_LE
 #define TO_RGB32
-#include "glz_decode_tmpl.c"
+#include "glz_decode.c.template"
 
 #define LZ_PLT
 #define PLT1_BE
 #define TO_RGB32
-#include "glz_decode_tmpl.c"
+#include "glz_decode.c.template"
 
 #define LZ_PLT
 #define PLT1_LE
 #define TO_RGB32
-#include "glz_decode_tmpl.c"
+#include "glz_decode.c.template"
 
 
 #define LZ_RGB16
-#include "glz_decode_tmpl.c"
+#include "glz_decode.c.template"
 #define LZ_RGB16
 #define TO_RGB32
-#include "glz_decode_tmpl.c"
+#include "glz_decode.c.template"
 
 #define LZ_RGB24
-#include "glz_decode_tmpl.c"
+#include "glz_decode.c.template"
 
 #define LZ_RGB32
-#include "glz_decode_tmpl.c"
+#include "glz_decode.c.template"
 
 #define LZ_RGB_ALPHA
-#include "glz_decode_tmpl.c"
+#include "glz_decode.c.template"
 
 #undef LZ_UNEXPECT_CONDITIONAL
 #undef LZ_EXPECT_CONDITIONAL

@@ -235,7 +235,7 @@ spicec_LDADD =								\
 	$(NULL)
 
 EXTRA_DIST =				\
-	glz_decode_tmpl.c		\
+	glz_decode.c.template		\
 	x11/images/red_icon.c		\
 	x11/images/alt_image.c		\
 	gui/commonv2c.ttf.c		\
