@@ -22,7 +22,7 @@
 #endif
 
 #include <string.h>
-#include "red_common.h"
+#include "common.h"
 #include "agent-msg-filter.h"
 #include "red_dispatcher.h"
 

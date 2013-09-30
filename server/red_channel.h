@@ -29,7 +29,7 @@
 #include "common/marshaller.h"
 
 #include "spice.h"
-#include "red_common.h"
+#include "common.h"
 #include "demarshallers.h"
 #include "reds_stream.h"
 #include "stat.h"

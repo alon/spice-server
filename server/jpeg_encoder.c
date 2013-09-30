@@ -18,7 +18,7 @@
 #include <config.h>
 #endif
 
-#include "red_common.h"
+#include "common.h"
 #include "jpeg_encoder.h"
 #include <jpeglib.h>
 

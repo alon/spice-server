@@ -19,7 +19,7 @@
 #include <config.h>
 #endif
 
-#include "red_common.h"
+#include "common.h"
 #include "mjpeg_encoder.h"
 #include <jerror.h>
 #include <jpeglib.h>

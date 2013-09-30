@@ -21,7 +21,7 @@
 
 #include <inttypes.h>
 
-#include "red_common.h"
+#include "common.h"
 #include "red_memslots.h"
 
 static unsigned long __get_clean_virt(RedMemSlotInfo *info, QXLPHYSICAL addr)

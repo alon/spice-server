@@ -19,8 +19,8 @@
 #include <config.h>
 #endif
 
+#include "common.h"
 #include "main_dispatcher.h"
-#include "red_common.h"
 #include "reds_stream.h"
 #include "common/log.h"
 

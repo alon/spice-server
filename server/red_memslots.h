@@ -19,7 +19,7 @@
 #ifndef _H_REDMEMSLOTS
 #define _H_REDMEMSLOTS
 
-#include "red_common.h"
+#include "common.h"
 
 #include <spice/qxl_dev.h>
 

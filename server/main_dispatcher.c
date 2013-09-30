@@ -4,7 +4,7 @@
 #include <errno.h>
 #include <pthread.h>
 
-#include "red_common.h"
+#include "common.h"
 #include "dispatcher.h"
 #include "main_dispatcher.h"
 #include "red_channel.h"

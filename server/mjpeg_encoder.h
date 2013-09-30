@@ -19,7 +19,7 @@
 #ifndef _H_MJPEG_ENCODER
 #define _H_MJPEG_ENCODER
 
-#include "red_common.h"
+#include "common.h"
 
 enum {
     MJPEG_ENCODER_FRAME_UNSUPPORTED = -1,
