@@ -18,9 +18,8 @@
 #ifndef _H_RED_COMMON
 #define _H_RED_COMMON
 
-#include <sys/uio.h>
-#include <openssl/ssl.h>
 #include <spice/macros.h>
+#include <string.h>
 
 #include "common/mem.h"
 #include "common/spice_common.h"
