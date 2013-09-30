@@ -202,24 +202,24 @@ typedef uint16_t rgb16_pixel_t;
 
 
 #define GLZ_ENCODE_SIZE
-#include "glz_encode_match_tmpl.c"
+#include "glz_encode_match.c.template"
 #define GLZ_ENCODE_MATCH
-#include "glz_encode_match_tmpl.c"
+#include "glz_encode_match.c.template"
 
 #define LZ_PLT
-#include "glz_encode_tmpl.c"
+#include "glz_encode.c.template"
 
 #define LZ_RGB16
-#include "glz_encode_tmpl.c"
+#include "glz_encode.c.template"
 
 #define LZ_RGB24
-#include "glz_encode_tmpl.c"
+#include "glz_encode.c.template"
 
 #define LZ_RGB32
-#include "glz_encode_tmpl.c"
+#include "glz_encode.c.template"
 
 #define LZ_RGB_ALPHA
-#include "glz_encode_tmpl.c"
+#include "glz_encode.c.template"
 
 
 int glz_encode(GlzEncoderContext *opaque_encoder,

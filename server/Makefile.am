@@ -139,10 +139,10 @@ libspice_serverinclude_HEADERS =		\
 	$(NULL)
 
 EXTRA_DIST =					\
-	red_bitmap_utils_tmpl.c			\
-	cache_item.tmpl.c			\
-	glz_encode_match_tmpl.c			\
-	glz_encode_tmpl.c			\
+	red_bitmap_utils.c.template			\
+	cache_item.c.template			\
+	glz_encode_match.c.template			\
+	glz_encode.c.template			\
 	spice-server.syms			\
 	$(NULL)
 
