@@ -44,13 +44,13 @@
 #include "common/region.h"
 #include "common/ring.h"
 
-#include "display_channel.h"
+#include "display-channel.h"
 #include "stream.h"
 
 #include "spice.h"
 #include "red_worker.h"
-#include "cursor_channel.h"
-#include "tree_item.h"
+#include "cursor-channel.h"
+#include "tree.h"
 #include "utils.h"
 
 #define CMD_RING_POLL_TIMEOUT 10 //milli
@@ -1224,7 +1224,7 @@ static void handle_dev_del_memslot(void *opaque, uint32_t message_type, void *pa
     uint32_t slot_id = msg->slot_id;
     uint32_t slot_group_id = msg->slot_group_id;
 
-    red_memslot_info_del_slot(&worker->mem_slots, slot_group_id, slot_id);
+    memslot_info_del_slot(&worker->mem_slots, slot_group_id, slot_id);
 }
 
 static void handle_dev_destroy_surface_wait(void *opaque, uint32_t message_type, void *payload)
@@ -1296,7 +1296,7 @@ static void dev_create_primary_surface(RedWorker *worker, uint32_t surface_id,
     spice_warn_if(((uint64_t)abs(surface.stride) * (uint64_t)surface.height) !=
              abs(surface.stride) * surface.height);
 
-    line_0 = (uint8_t*)get_virt(&worker->mem_slots, surface.mem,
+    line_0 = (uint8_t*)memslot_get_virt(&worker->mem_slots, surface.mem,
                                 surface.height * abs(surface.stride),
                                 surface.group_id, &error);
     if (error) {
@@ -1565,7 +1565,7 @@ static void handle_dev_monitors_config_async(void *opaque,
     int min_size = sizeof(QXLMonitorsConfig) + sizeof(QXLHead);
     int error;
     QXLMonitorsConfig *dev_monitors_config =
-        (QXLMonitorsConfig*)get_virt(&worker->mem_slots, msg->monitors_config,
+        (QXLMonitorsConfig*)memslot_get_virt(&worker->mem_slots, msg->monitors_config,
                                      min_size, msg->group_id, &error);
 
     if (error) {
@@ -1695,7 +1695,7 @@ static void handle_dev_set_mouse_mode(void *opaque, uint32_t message_type, void 
 
 static void dev_add_memslot(RedWorker *worker, QXLDevMemSlot mem_slot)
 {
-    red_memslot_info_add_slot(&worker->mem_slots, mem_slot.slot_group_id, mem_slot.slot_id,
+    memslot_info_add_slot(&worker->mem_slots, mem_slot.slot_group_id, mem_slot.slot_id,
                               mem_slot.addr_delta, mem_slot.virt_start, mem_slot.virt_end,
                               mem_slot.generation);
 }
@@ -1706,7 +1706,7 @@ static void handle_dev_add_memslot(void *opaque, uint32_t message_type, void *pa
     RedWorkerMessageAddMemslot *msg = payload;
     QXLDevMemSlot mem_slot = msg->mem_slot;
 
-    red_memslot_info_add_slot(&worker->mem_slots, mem_slot.slot_group_id, mem_slot.slot_id,
+    memslot_info_add_slot(&worker->mem_slots, mem_slot.slot_group_id, mem_slot.slot_id,
                               mem_slot.addr_delta, mem_slot.virt_start, mem_slot.virt_end,
                               mem_slot.generation);
 }
@@ -1723,7 +1723,7 @@ static void handle_dev_reset_memslots(void *opaque, uint32_t message_type, void 
 {
     RedWorker *worker = opaque;
 
-    red_memslot_info_reset(&worker->mem_slots);
+    memslot_info_reset(&worker->mem_slots);
 }
 
 static void handle_dev_driver_unload(void *opaque, uint32_t message_type, void *payload)
@@ -2102,7 +2102,7 @@ RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher)
     g_source_attach(source, worker->main_context);
     g_source_unref(source);
 
-    red_memslot_info_init(&worker->mem_slots,
+    memslot_info_init(&worker->mem_slots,
                           init_info.num_memslots_groups,
                           init_info.num_memslots,
                           init_info.memslot_gen_bits,

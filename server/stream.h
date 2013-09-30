@@ -3,10 +3,10 @@
 
 #include <glib.h>
 #include "utils.h"
-#include "mjpeg_encoder.h"
+#include "mjpeg-encoder.h"
 #include "common/region.h"
 #include "red_channel.h"
-#include "spice_image_cache.h"
+#include "image-cache.h"
 
 #define RED_STREAM_DETACTION_MAX_DELTA ((1000 * 1000 * 1000) / 5) // 1/5 sec
 #define RED_STREAM_CONTINUS_MAX_DELTA (1000 * 1000 * 1000)

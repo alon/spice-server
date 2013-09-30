@@ -1,12 +1,9 @@
 #ifndef UTILS_H_
 # define UTILS_H_
 
-#include <glib.h>
-#include <stdint.h>
-#include <time.h>
+#include "common.h"
 
-#include "common/ring.h"
-#include "common/log.h"
+#define SPICE_GNUC_VISIBLE __attribute__ ((visibility ("default")))
 
 static inline void set_bit(int index, uint32_t *addr)
 {

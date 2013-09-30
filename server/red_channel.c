@@ -41,7 +41,7 @@
 #include "red_channel.h"
 #include "reds.h"
 #include "reds_stream.h"
-#include "main_dispatcher.h"
+#include "main-dispatcher.h"
 #include "utils.h"
 
 typedef struct EmptyMsgPipeItem {

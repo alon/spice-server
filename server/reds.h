@@ -28,7 +28,10 @@
 #include "common/messages.h"
 #include "spice.h"
 #include "red_channel.h"
-#include "migration_protocol.h"
+#include "migration-protocol.h"
+
+#define SPICE_GNUC_VISIBLE __attribute__ ((visibility ("default")))
+
 
 struct QXLState {
     QXLInterface          *qif;

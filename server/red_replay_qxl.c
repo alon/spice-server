@@ -25,7 +25,7 @@
 #include "reds.h"
 #include "red_worker.h"
 #include "common.h"
-#include "red_memslots.h"
+#include "memslot.h"
 #include "red_parse_qxl.h"
 #include "red_replay_qxl.h"
 #include <glib.h>

@@ -21,7 +21,7 @@
 
 #include <spice/qxl_dev.h>
 #include "common.h"
-#include "red_memslots.h"
+#include "memslot.h"
 
 void red_record_drawable(FILE *fd, RedMemSlotInfo *slots, int group_id,
                          QXLPHYSICAL addr, uint32_t flags);

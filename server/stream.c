@@ -1,5 +1,5 @@
 #include "stream.h"
-#include "display_channel.h"
+#include "display-channel.h"
 
 #define FPS_TEST_INTERVAL 1
 #define FOREACH_STREAMS(display, item)                  \
