@@ -572,6 +572,20 @@ static GlzDrawableInstanceItem *add_glz_drawable_instance(RedGlzDrawable *glz_dr
     return ret;
 }
 
+static const LzImageType bitmap_fmt_to_lz_image_type[] = {
+    LZ_IMAGE_TYPE_INVALID,
+    LZ_IMAGE_TYPE_PLT1_LE,
+    LZ_IMAGE_TYPE_PLT1_BE,
+    LZ_IMAGE_TYPE_PLT4_LE,
+    LZ_IMAGE_TYPE_PLT4_BE,
+    LZ_IMAGE_TYPE_PLT8,
+    LZ_IMAGE_TYPE_RGB16,
+    LZ_IMAGE_TYPE_RGB24,
+    LZ_IMAGE_TYPE_RGB32,
+    LZ_IMAGE_TYPE_RGBA,
+    LZ_IMAGE_TYPE_A8
+};
+
 #define MIN_GLZ_SIZE_FOR_ZLIB 100
 
 int dcc_compress_image_glz(DisplayChannelClient *dcc,
@@ -586,7 +600,7 @@ int dcc_compress_image_glz(DisplayChannelClient *dcc,
 #endif
     GlzData *glz_data = &dcc->glz_data;
     ZlibData *zlib_data;
-    LzImageType type = MAP_BITMAP_FMT_TO_LZ_IMAGE_TYPE[src->format];
+    LzImageType type = bitmap_fmt_to_lz_image_type[src->format];
     RedGlzDrawable *glz_drawable;
     GlzDrawableInstanceItem *glz_drawable_instance;
     int glz_size;
@@ -668,7 +682,7 @@ int dcc_compress_image_lz(DisplayChannelClient *dcc,
 {
     LzData *lz_data = &dcc->lz_data;
     LzContext *lz = dcc->lz;
-    LzImageType type = MAP_BITMAP_FMT_TO_LZ_IMAGE_TYPE[src->format];
+    LzImageType type = bitmap_fmt_to_lz_image_type[src->format];
     int size;            // size of the compressed data
 
 #ifdef COMPRESS_STAT

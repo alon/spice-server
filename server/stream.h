@@ -41,6 +41,13 @@ enum {
     STREAM_FRAME_CONTAINER,
 };
 
+enum {
+    STREAM_VIDEO_INVALID,
+    STREAM_VIDEO_OFF,
+    STREAM_VIDEO_ALL,
+    STREAM_VIDEO_FILTER
+};
+
 #define STREAM_STATS
 #ifdef STREAM_STATS
 typedef struct StreamStats {
