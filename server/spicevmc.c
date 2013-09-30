@@ -30,10 +30,10 @@
 
 #include "common/generated_server_marshallers.h"
 
-#include "char_device.h"
+#include "char-device.h"
 #include "red_channel.h"
 #include "reds.h"
-#include "migration_protocol.h"
+#include "migration-protocol.h"
 
 /* todo: add flow control. i.e.,
  * (a) limit the tokens available for the client

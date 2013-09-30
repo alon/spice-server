@@ -33,11 +33,10 @@
 
 #include "spice.h"
 #include "red_worker.h"
-#include "reds_sw_canvas.h"
+#include "canvas.h"
 #include "reds.h"
 #include "dispatcher.h"
 #include "red_parse_qxl.h"
-#include "spice_server_utils.h"
 #include "stream.h"
 
 #include "red_dispatcher.h"

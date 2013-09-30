@@ -1,5 +1,5 @@
 #include "dcc.h"
-#include "display_channel.h"
+#include "display-channel.h"
 
 #define DISPLAY_CLIENT_SHORT_TIMEOUT 15000000000ULL //nano
 
@@ -1072,7 +1072,7 @@ int dcc_compress_image(DisplayChannelClient *dcc,
 }
 
 #define CLIENT_PALETTE_CACHE
-#include "cache_item.c.template"
+#include "cache-item.c.template"
 #undef CLIENT_PALETTE_CACHE
 
 void dcc_palette_cache_palette(DisplayChannelClient *dcc, SpicePalette *palette,

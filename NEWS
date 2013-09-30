@@ -74,7 +74,7 @@ Major changes in 0.11.3:
  SPICE_MAIN_CAP_AGENT_CONNECTED_TOKENS
  SPICE_MAIN_CAP_SEAMLESS_MIGRATE
 * Misc:
- * char_device.c: Introducing shared flow control code for char devices
+ * char-device.c: Introducing shared flow control code for char devices
  * Enable build without client, cegui and slirp.
 
 Major changes in 0.11.0:

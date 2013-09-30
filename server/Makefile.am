@@ -4,6 +4,7 @@ SUBDIRS = . tests
 AM_CPPFLAGS =					\
 	-DSPICE_SERVER_INTERNAL			\
 	-DRED_STATISTICS			\
+	$(CELT051_CFLAGS)			\
 	$(COMMON_CFLAGS)			\
 	$(GLIB2_CFLAGS)				\
 	$(PIXMAN_CFLAGS)			\
@@ -47,24 +48,23 @@ libspice_server_la_LIBADD =						\
 libspice_server_la_SOURCES =			\
 	agent-msg-filter.c			\
 	agent-msg-filter.h			\
-	cache_item.h				\
-	char_device.c				\
-	char_device.h				\
+	cache-item.h				\
+	char-device.c				\
+	char-device.h				\
 	demarshallers.h				\
-	glz_encoder.c				\
-	glz_encoder.h				\
-	glz_encoder_config.h			\
-	glz_encoder_dictionary.c		\
-	glz_encoder_dictionary.h		\
-	glz_encoder_dictionary_protected.h	\
-	inputs_channel.c			\
-	inputs_channel.h			\
-	jpeg_encoder.c				\
-	jpeg_encoder.h				\
-	main_channel.c				\
-	main_channel.h				\
-	mjpeg_encoder.c				\
-	mjpeg_encoder.h				\
+	glz-encoder.c				\
+	glz-encoder.h				\
+	glz-encoder-dict.c		\
+	glz-encoder-dict.h		\
+	glz-encoder-priv.h	\
+	inputs-channel.c			\
+	inputs-channel.h			\
+	jpeg-encoder.c				\
+	jpeg-encoder.h				\
+	main-channel.c				\
+	main-channel.h				\
+	mjpeg-encoder.c				\
+	mjpeg-encoder.h				\
 	red_channel.c				\
 	red_channel.h				\
 	common.h				\
@@ -72,11 +72,11 @@ libspice_server_la_SOURCES =			\
 	dispatcher.h				\
 	red_dispatcher.c			\
 	red_dispatcher.h			\
-	main_dispatcher.c			\
-	main_dispatcher.h			\
-	migration_protocol.h		\
-	red_memslots.c				\
-	red_memslots.h				\
+	main-dispatcher.c			\
+	main-dispatcher.h			\
+	migration-protocol.h		\
+	memslot.c				\
+	memslot.h				\
 	red_parse_qxl.c				\
 	red_record_qxl.c			\
 	red_replay_qxl.c			\
@@ -84,45 +84,43 @@ libspice_server_la_SOURCES =			\
 	red_time.h				\
 	red_worker.c				\
 	red_worker.h				\
-	display_channel.c			\
-	display_channel.h			\
-	cursor_channel.c			\
-	cursor_channel.h			\
+	display-channel.c			\
+	display-channel.h			\
+	cursor-channel.c			\
+	cursor-channel.h			\
 	reds.c					\
 	reds.h					\
 	reds-private.h				\
 	reds_stream.c				\
 	reds_stream.h				\
-	reds_sw_canvas.c			\
-	reds_sw_canvas.h			\
-	snd_worker.c				\
-	snd_worker.h				\
+	sound.c				\
+	sound.h				\
 	spice-experimental.h			\
 	spice.h					\
 	stat.h					\
 	spicevmc.c				\
-	zlib_encoder.c				\
-	zlib_encoder.h				\
-	spice_bitmap_utils.h		\
-	spice_bitmap_utils.c		\
+	zlib-encoder.c				\
+	zlib-encoder.h				\
+	spice-bitmap-utils.h		\
+	spice-bitmap-utils.c		\
 	spice_server_utils.h		\
-	spice_image_cache.h			\
-	spice_image_cache.c			\
-	pixmap_cache.h				\
-	pixmap_cache.c				\
-	tree_item.h				\
-	tree_item.c				\
-	red_bitmap_utils.h				\
-	red_bitmap_utils.c				\
+	image-cache.h			\
+	image-cache.c			\
+	pixmap-cache.h				\
+	pixmap-cache.c				\
+	tree.h				\
+	tree.c				\
 	utils.c					\
 	utils.h					\
 	stream.c					\
 	stream.h					\
 	dcc.c					\
-	dcc_send.c					\
+	dcc-send.c					\
 	dcc.h					\
-	dcc_encoders.c					\
-	dcc_encoders.h					\
+	dcc-encoders.c					\
+	dcc-encoders.h					\
+	canvas.c					\
+	canvas.h					\
 	$(NULL)
 
 if SUPPORT_SMARTCARD
@@ -140,9 +138,9 @@ libspice_serverinclude_HEADERS =		\
 
 EXTRA_DIST =					\
 	red_bitmap_utils.c.template			\
-	cache_item.c.template			\
-	glz_encode_match.c.template			\
-	glz_encode.c.template			\
+	cache-item.c.template			\
+	glz-encode-match.c.template			\
+	glz-encode.c.template			\
 	spice-server.syms			\
 	$(NULL)
 

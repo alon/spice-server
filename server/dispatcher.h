@@ -1,8 +1,7 @@
 #ifndef DISPATCHER_H
 #define DISPATCHER_H
 
-#include <spice.h>
-#include "utils.h"
+#include "common.h"
 
 typedef struct Dispatcher Dispatcher;
 

@@ -23,10 +23,10 @@
 #include <vscard_common.h>
 
 #include "reds.h"
-#include "char_device.h"
+#include "char-device.h"
 #include "red_channel.h"
 #include "smartcard.h"
-#include "migration_protocol.h"
+#include "migration-protocol.h"
 
 /*
  * TODO: the code doesn't really support multiple readers.

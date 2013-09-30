@@ -21,7 +21,7 @@
 
 #include <spice/qxl_dev.h>
 #include "common.h"
-#include "red_memslots.h"
+#include "memslot.h"
 
 typedef struct RedDrawable {
     int refs;

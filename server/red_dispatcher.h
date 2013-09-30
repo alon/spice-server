@@ -18,7 +18,6 @@
 #ifndef _H_RED_DISPATCHER
 #define _H_RED_DISPATCHER
 
-#include "spice_server_utils.h"
 #include "red_channel.h"
 
 typedef struct RedDispatcher RedDispatcher;

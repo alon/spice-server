@@ -20,7 +20,7 @@
 #endif
 
 #include "common.h"
-#include "main_dispatcher.h"
+#include "main-dispatcher.h"
 #include "reds_stream.h"
 #include "common/log.h"
 

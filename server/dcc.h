@@ -2,9 +2,9 @@
 # define DCC_H_
 
 #include "red_worker.h"
-#include "pixmap_cache.h"
-#include "cache_item.h"
-#include "dcc_encoders.h"
+#include "pixmap-cache.h"
+#include "cache-item.h"
+#include "dcc-encoders.h"
 #include "stream.h"
 
 #define PALETTE_CACHE_HASH_SHIFT 8
