@@ -38,6 +38,7 @@
 #include "dispatcher.h"
 #include "red_parse_qxl.h"
 #include "spice_server_utils.h"
+#include "stream.h"
 
 #include "red_dispatcher.h"
 
@@ -721,9 +722,10 @@ void red_dispatcher_set_mm_time(uint32_t mm_time)
     }
 }
 
-static inline int calc_compression_level(void)
+static int calc_compression_level(void)
 {
-    spice_assert(streaming_video != STREAM_VIDEO_INVALID);
+    spice_return_val_if_fail(streaming_video != STREAM_VIDEO_INVALID, -1);
+
     if ((streaming_video != STREAM_VIDEO_OFF) ||
         (image_compression != SPICE_IMAGE_COMPRESS_QUIC)) {
         return 0;
