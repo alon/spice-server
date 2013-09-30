@@ -723,16 +723,6 @@ static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *
     return n;
 }
 
-static inline void fill_rects_clip(SpiceMarshaller *m, SpiceClipRects *data)
-{
-    int i;
-
-    spice_marshaller_add_uint32(m, data->num_rects);
-    for (i = 0; i < data->num_rects; i++) {
-        spice_marshall_Rect(m, data->rects + i);
-    }
-}
-
 static void fill_base(SpiceMarshaller *base_marshaller, Drawable *drawable)
 {
     SpiceMsgDisplayBase base;
