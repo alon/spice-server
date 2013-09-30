@@ -23,6 +23,8 @@
 #define WIDE_CLIENT_ACK_WINDOW 40
 #define NARROW_CLIENT_ACK_WINDOW 20
 
+#define MAX_PIPE_SIZE 50
+
 typedef struct WaitForChannels {
     SpiceMsgWaitForChannels header;
     SpiceWaitForChannel buf[MAX_CACHE_CLIENTS];
