@@ -21,16 +21,6 @@
 
 #define SPICE_LOG_DOMAIN "SpiceWorker"
 
-/* Common variable abberiviations:
- *
- * rcc - RedChannelClient
- * ccc - CursorChannelClient (not to be confused with common_cc)
- * common_cc - CommonChannelClient
- * dcc - DisplayChannelClient
- * cursor_red_channel - downcast of CursorChannel to RedChannel
- * display_red_channel - downcast of DisplayChannel to RedChannel
- */
-
 #include <stdio.h>
 #include <stdarg.h>
 #include <fcntl.h>
@@ -63,14 +53,8 @@
 #include "tree_item.h"
 #include "utils.h"
 
-//#define COMPRESS_STAT
-//#define DUMP_BITMAP
-//#define COMPRESS_DEBUG
-
 #define CMD_RING_POLL_TIMEOUT 10 //milli
 #define CMD_RING_POLL_RETRIES 200
-
-#define MAX_EVENT_SOURCES 20
 
 typedef struct RedWorker {
     pthread_t thread;
