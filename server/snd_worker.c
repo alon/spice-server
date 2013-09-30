@@ -30,7 +30,7 @@
 #include "common/generated_server_marshallers.h"
 
 #include "spice.h"
-#include "red_common.h"
+#include "common.h"
 #include "main_channel.h"
 #include "reds.h"
 #include "red_dispatcher.h"

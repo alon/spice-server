@@ -22,7 +22,7 @@
 #include <stdbool.h>
 #include <inttypes.h>
 #include "red_worker.h"
-#include "red_common.h"
+#include "common.h"
 #include "red_memslots.h"
 #include "red_parse_qxl.h"
 #include "zlib_encoder.h"

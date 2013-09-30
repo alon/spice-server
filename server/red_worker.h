@@ -24,7 +24,7 @@
 #include "common/marshaller.h"
 
 #include "utils.h"
-#include "red_common.h"
+#include "common.h"
 #include "red_dispatcher.h"
 #include "red_parse_qxl.h"
 

@@ -67,7 +67,7 @@ libspice_server_la_SOURCES =			\
 	mjpeg_encoder.h				\
 	red_channel.c				\
 	red_channel.h				\
-	red_common.h				\
+	common.h				\
 	dispatcher.c				\
 	dispatcher.h				\
 	red_dispatcher.c			\

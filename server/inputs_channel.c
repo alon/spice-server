@@ -35,7 +35,7 @@
 
 #include "demarshallers.h"
 #include "spice.h"
-#include "red_common.h"
+#include "common.h"
 #include "reds.h"
 #include "reds_stream.h"
 #include "red_channel.h"

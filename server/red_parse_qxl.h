@@ -20,7 +20,7 @@
 #define RED_ABI_TRANSLATE_H
 
 #include <spice/qxl_dev.h>
-#include "red_common.h"
+#include "common.h"
 #include "red_memslots.h"
 
 typedef struct RedDrawable {

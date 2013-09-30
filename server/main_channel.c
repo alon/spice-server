@@ -43,7 +43,7 @@
 #include "demarshallers.h"
 #include "main_channel.h"
 #include "red_channel.h"
-#include "red_common.h"
+#include "common.h"
 #include "reds.h"
 #include "migration_protocol.h"
 #include "main_dispatcher.h"

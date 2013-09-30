@@ -19,7 +19,7 @@
 #include <config.h>
 #endif
 
-#include "red_common.h"
+#include "common.h"
 #include "zlib_encoder.h"
 #include <zlib.h>
 
