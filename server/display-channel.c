@@ -404,6 +404,20 @@ static void current_remove_drawable(DisplayChannel *display, Drawable *item)
     display->current_size--;
 }
 
+static void drawable_remove_from_pipes(Drawable *drawable)
+{
+    DrawablePipeItem *dpi;
+    RingItem *item, *next;
+
+    RING_FOREACH_SAFE(item, next, &drawable->pipes) {
+        dpi = SPICE_CONTAINEROF(item, DrawablePipeItem, base);
+        if (pipe_item_is_linked(&dpi->dpi_pipe_item)) {
+            red_channel_client_pipe_remove_and_release(RED_CHANNEL_CLIENT(dpi->dcc),
+                                                       &dpi->dpi_pipe_item);
+        }
+    }
+}
+
 static void current_remove(DisplayChannel *display, TreeItem *item)
 {
     TreeItem *now = item;
@@ -416,7 +430,7 @@ static void current_remove(DisplayChannel *display, TreeItem *item)
         if (now->type == TREE_ITEM_TYPE_DRAWABLE) {
             Drawable *drawable = SPICE_CONTAINEROF(now, Drawable, tree_item);
             ring_item = now->siblings_link.prev;
-            red_pipes_remove_drawable(drawable);
+            drawable_remove_from_pipes(drawable);
             current_remove_drawable(display, drawable);
         } else {
             Container *container = (Container *)now;
@@ -483,7 +497,7 @@ static int current_add_equal(DisplayChannel *display, DrawItem *item, TreeItem *
         } else {
             pipes_add_drawable(display, drawable);
         }
-        red_pipes_remove_drawable(other_drawable);
+        drawable_remove_from_pipes(other_drawable);
         display_channel_drawable_unref(display, other_drawable);
         return TRUE;
     }
@@ -525,7 +539,7 @@ static int current_add_equal(DisplayChannel *display, DrawItem *item, TreeItem *
                 }
             }
             /* not sending other_drawable where possible */
-            red_pipes_remove_drawable(other_drawable);
+            drawable_remove_from_pipes(other_drawable);
 
             display_channel_drawable_unref(display, other_drawable);
             return TRUE;
@@ -534,7 +548,7 @@ static int current_add_equal(DisplayChannel *display, DrawItem *item, TreeItem *
     case QXL_EFFECT_OPAQUE_BRUSH:
         if (is_same_geometry(drawable, other_drawable)) {
             current_add_drawable(display, drawable, &other->siblings_link);
-            red_pipes_remove_drawable(other_drawable);
+            drawable_remove_from_pipes(other_drawable);
             current_remove_drawable(display, other_drawable);
             pipes_add_drawable(display, drawable);
             return TRUE;

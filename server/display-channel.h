@@ -420,7 +420,6 @@ static inline void region_add_clip_rects(QRegion *rgn, SpiceClipRects *data)
 }
 
 uint32_t generate_uid(DisplayChannel *display);
-void red_pipes_remove_drawable(Drawable *drawable);
 void detach_streams_behind(DisplayChannel *display, QRegion *region, Drawable *drawable);
 void drawable_draw(DisplayChannel *display, Drawable *item);
 void drawables_init(DisplayChannel *display);
