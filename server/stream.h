@@ -140,6 +140,8 @@ void                  stream_trace_update                           (DisplayChan
 void                  stream_maintenance                            (DisplayChannel *display,
                                                                      Drawable *candidate,
                                                                      Drawable *prev);
+void                  stream_timout                                 (DisplayChannel *display);
+void                  stream_detach_and_stop                        (DisplayChannel *display);
 
 void                  stream_agent_unref                            (DisplayChannel *display,
                                                                      StreamAgent *agent);

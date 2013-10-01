@@ -23,6 +23,20 @@ static SurfaceCreateItem *surface_create_item_new(RedChannel* channel,
     return create;
 }
 
+int dcc_drawable_is_in_pipe(DisplayChannelClient *dcc, Drawable *drawable)
+{
+    DrawablePipeItem *dpi;
+    RingItem *dpi_link, *dpi_next;
+
+    DRAWABLE_FOREACH_DPI_SAFE(drawable, dpi_link, dpi_next, dpi) {
+        if (dpi->dcc == dcc) {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
 /*
  * Return: TRUE if wait_if_used == FALSE, or otherwise, if all of the pipe items that
  * are related to the surface have been cleared (or sent) from the pipe.

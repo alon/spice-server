@@ -184,6 +184,8 @@ void                       dcc_send_item                             (DisplayCha
                                                                       PipeItem *item);
 int                        dcc_clear_surface_drawables_from_pipe     (DisplayChannelClient *dcc,
                                                                       int surface_id, int force);
+int                        dcc_drawable_is_in_pipe                   (DisplayChannelClient *dcc,
+                                                                      Drawable *drawable);
 
 typedef struct compress_send_data_t {
     void*    comp_buf;
