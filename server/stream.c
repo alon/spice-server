@@ -842,7 +842,7 @@ static void detach_stream_gracefully(DisplayChannel *display, Stream *stream,
  *           involves sending an upgrade image to the client, this drawable won't be rendered
  *           (see red_display_detach_stream_gracefully).
  */
-void detach_streams_behind(DisplayChannel *display, QRegion *region, Drawable *drawable)
+void stream_detach_behind(DisplayChannel *display, QRegion *region, Drawable *drawable)
 {
     Ring *ring = &display->streams;
     RingItem *item = ring_get_head(ring);

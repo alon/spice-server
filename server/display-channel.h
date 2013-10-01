@@ -419,7 +419,6 @@ static inline void region_add_clip_rects(QRegion *rgn, SpiceClipRects *data)
     }
 }
 
-void detach_streams_behind(DisplayChannel *display, QRegion *region, Drawable *drawable);
 void drawable_draw(DisplayChannel *display, Drawable *item);
 void drawables_init(DisplayChannel *display);
 

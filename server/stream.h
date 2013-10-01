@@ -144,6 +144,9 @@ void                  stream_timout                                 (DisplayChan
 void                  stream_detach_and_stop                        (DisplayChannel *display);
 void                  stream_trace_add_drawable                     (DisplayChannel *display,
                                                                      Drawable *item);
+void                  stream_detach_behind                          (DisplayChannel *display,
+                                                                     QRegion *region,
+                                                                     Drawable *drawable);
 
 void                  stream_agent_unref                            (DisplayChannel *display,
                                                                      StreamAgent *agent);
