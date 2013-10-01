@@ -710,7 +710,7 @@ static int current_add_with_shadow(DisplayChannel *display, Ring *ring, Drawable
 
     // only primary surface streams are supported
     if (is_primary_surface(display, item->surface_id)) {
-        detach_streams_behind(display, &shadow->base.rgn, NULL);
+        stream_detach_behind(display, &shadow->base.rgn, NULL);
     }
 
     ring_add(ring, &shadow->base.siblings_link);
@@ -723,7 +723,7 @@ static int current_add_with_shadow(DisplayChannel *display, Ring *ring, Drawable
         streams_update_visible_region(display, item);
     } else {
         if (is_primary_surface(display, item->surface_id)) {
-            detach_streams_behind(display, &item->tree_item.base.rgn, item);
+            stream_detach_behind(display, &item->tree_item.base.rgn, item);
         }
     }
     stat_add(&display->add_stat, start_time);
@@ -833,14 +833,14 @@ static int current_add(DisplayChannel *display, Ring *ring, Drawable *drawable)
         current_add_drawable(display, drawable, ring);
     } else {
         /*
-         * red_detach_streams_behind can affect the current tree since
+         * stream_detach_behind can affect the current tree since
          * it may trigger calls to display_channel_draw. Thus, the
          * drawable should be added to the tree before calling
-         * red_detach_streams_behind
+         * stream_detach_behind
          */
         current_add_drawable(display, drawable, ring);
         if (is_primary_surface(display, drawable->surface_id)) {
-            detach_streams_behind(display, &drawable->tree_item.base.rgn, drawable);
+            stream_detach_behind(display, &drawable->tree_item.base.rgn, drawable);
         }
     }
     region_destroy(&exclude_rgn);
@@ -1018,7 +1018,7 @@ static int handle_surface_deps(DisplayChannel *display, Drawable *drawable)
                 QRegion depend_region;
                 region_init(&depend_region);
                 region_add(&depend_region, &drawable->red_drawable->surfaces_rects[x]);
-                detach_streams_behind(display, &depend_region, NULL);
+                stream_detach_behind(display, &depend_region, NULL);
             }
         }
     }
