@@ -132,20 +132,6 @@ static int cursor_is_connected(RedWorker *worker)
         red_channel_is_connected(RED_CHANNEL(worker->cursor_channel));
 }
 
-void red_pipes_remove_drawable(Drawable *drawable)
-{
-    DrawablePipeItem *dpi;
-    RingItem *item, *next;
-
-    RING_FOREACH_SAFE(item, next, &drawable->pipes) {
-        dpi = SPICE_CONTAINEROF(item, DrawablePipeItem, base);
-        if (pipe_item_is_linked(&dpi->dpi_pipe_item)) {
-            red_channel_client_pipe_remove_and_release(RED_CHANNEL_CLIENT(dpi->dcc),
-                                                       &dpi->dpi_pipe_item);
-        }
-    }
-}
-
 static uint8_t *common_alloc_recv_buf(RedChannelClient *rcc, uint16_t type, uint32_t size)
 {
     CommonChannel *common = SPICE_CONTAINEROF(rcc->channel, CommonChannel, base);
