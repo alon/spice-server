@@ -142,6 +142,8 @@ void                  stream_maintenance                            (DisplayChan
                                                                      Drawable *prev);
 void                  stream_timout                                 (DisplayChannel *display);
 void                  stream_detach_and_stop                        (DisplayChannel *display);
+void                  stream_trace_add_drawable                     (DisplayChannel *display,
+                                                                     Drawable *item);
 
 void                  stream_agent_unref                            (DisplayChannel *display,
                                                                      StreamAgent *agent);
