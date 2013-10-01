@@ -1,6 +1,6 @@
 #include "display-channel.h"
 
-uint32_t generate_uid(DisplayChannel *display)
+uint32_t display_channel_generate_uid(DisplayChannel *display)
 {
     spice_return_val_if_fail(display != NULL, 0);
 
@@ -956,7 +956,7 @@ static void handle_self_bitmap(DisplayChannel *display, Drawable *drawable)
     image = spice_new0(SpiceImage, 1);
     image->descriptor.type = SPICE_IMAGE_TYPE_BITMAP;
     image->descriptor.flags = 0;
-    QXL_SET_IMAGE_ID(image, QXL_IMAGE_GROUP_RED, generate_uid(display));
+    QXL_SET_IMAGE_ID(image, QXL_IMAGE_GROUP_RED, display_channel_generate_uid(display));
     image->u.bitmap.flags = surface->context.top_down ? SPICE_BITMAP_FLAGS_TOP_DOWN : 0;
     image->u.bitmap.format = spice_bitmap_from_surface_type(surface->context.format);
     image->u.bitmap.stride = dest_stride;
