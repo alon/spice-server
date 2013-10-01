@@ -1924,7 +1924,7 @@ static void red_marshall_image(RedChannelClient *rcc, SpiceMarshaller *m, ImageI
     spice_assert(rcc && display && item);
     worker = display->common.worker;
 
-    QXL_SET_IMAGE_ID(&red_image, QXL_IMAGE_GROUP_RED, generate_uid(display));
+    QXL_SET_IMAGE_ID(&red_image, QXL_IMAGE_GROUP_RED, display_channel_generate_uid(display));
     red_image.descriptor.type = SPICE_IMAGE_TYPE_BITMAP;
     red_image.descriptor.flags = item->image_flags;
     red_image.descriptor.width = item->width;
