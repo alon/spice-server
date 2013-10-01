@@ -392,6 +392,67 @@ static void current_add_drawable(DisplayChannel *display,
     drawable->refs++;
 }
 
+static void current_remove_drawable(DisplayChannel *display, Drawable *item)
+{
+    /* todo: move all to unref? */
+    stream_trace_add_drawable(display, item);
+    draw_item_remove_shadow(&item->tree_item);
+    ring_remove(&item->tree_item.base.siblings_link);
+    ring_remove(&item->list_link);
+    ring_remove(&item->surface_list_link);
+    display_channel_drawable_unref(display, item);
+    display->current_size--;
+}
+
+static void current_remove(DisplayChannel *display, TreeItem *item)
+{
+    TreeItem *now = item;
+
+    /* depth-first tree traversal, todo: do a to tree_foreach()? */
+    for (;;) {
+        Container *container = now->container;
+        RingItem *ring_item;
+
+        if (now->type == TREE_ITEM_TYPE_DRAWABLE) {
+            Drawable *drawable = SPICE_CONTAINEROF(now, Drawable, tree_item);
+            ring_item = now->siblings_link.prev;
+            red_pipes_remove_drawable(drawable);
+            current_remove_drawable(display, drawable);
+        } else {
+            Container *container = (Container *)now;
+
+            spice_assert(now->type == TREE_ITEM_TYPE_CONTAINER);
+
+            if ((ring_item = ring_get_head(&container->items))) {
+                now = SPICE_CONTAINEROF(ring_item, TreeItem, siblings_link);
+                continue;
+            }
+            ring_item = now->siblings_link.prev;
+            container_free(container);
+        }
+        if (now == item) {
+            return;
+        }
+
+        if ((ring_item = ring_next(&container->items, ring_item))) {
+            now = SPICE_CONTAINEROF(ring_item, TreeItem, siblings_link);
+        } else {
+            now = (TreeItem *)container;
+        }
+    }
+}
+
+static void current_remove_all(DisplayChannel *display, int surface_id)
+{
+    Ring *ring = &display->surfaces[surface_id].current;
+    RingItem *ring_item;
+
+    while ((ring_item = ring_get_head(ring))) {
+        TreeItem *now = SPICE_CONTAINEROF(ring_item, TreeItem, siblings_link);
+        current_remove(display, now);
+    }
+}
+
 static int current_add_equal(DisplayChannel *display, DrawItem *item, TreeItem *other)
 {
     DrawItem *other_draw_item;

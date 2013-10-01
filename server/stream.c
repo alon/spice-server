@@ -904,3 +904,22 @@ void stream_timout(DisplayChannel *display)
         }
     }
 }
+
+void stream_trace_add_drawable(DisplayChannel *display, Drawable *item)
+{
+    ItemTrace *trace;
+
+    if (!item->stream || !item->streamable) {
+        return;
+    }
+
+    trace = &display->items_trace[display->next_item_trace++ & ITEMS_TRACE_MASK];
+    trace->time = item->creation_time;
+    trace->frames_count = item->frames_count;
+    trace->gradual_frames_count = item->gradual_frames_count;
+    trace->last_gradual_frame = item->last_gradual_frame;
+    SpiceRect* src_area = &item->red_drawable->u.copy.src_area;
+    trace->width = src_area->right - src_area->left;
+    trace->height = src_area->bottom - src_area->top;
+    trace->dest_area = item->red_drawable->bbox;
+}
