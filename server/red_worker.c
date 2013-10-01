@@ -172,11 +172,13 @@ void red_drawable_unref(RedWorker *worker, RedDrawable *red_drawable,
     free(red_drawable);
 }
 
-static RedDrawable *red_drawable_new(void)
+static RedDrawable *red_drawable_new(RedWorker *worker)
 {
     RedDrawable * red = spice_new0(RedDrawable, 1);
 
     red->refs = 1;
+    worker->red_drawable_count++;
+
     return red;
 }
 
@@ -192,9 +194,7 @@ static bool red_process_draw(RedWorker *worker, QXLCommandExt *ext_cmd)
     if (!drawable)
         goto end;
 
-    worker->red_drawable_count++;
-
-    red_drawable = red_drawable_new();
+    red_drawable = red_drawable_new(worker);
     if (red_get_drawable(&worker->mem_slots, ext_cmd->group_id,
                          red_drawable, ext_cmd->cmd.data, ext_cmd->flags) != 0)
         goto end;
