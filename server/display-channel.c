@@ -1,5 +1,7 @@
 #include "display-channel.h"
 
+static void drawable_draw(DisplayChannel *display, Drawable *drawable);
+
 uint32_t display_channel_generate_uid(DisplayChannel *display)
 {
     spice_return_val_if_fail(display != NULL, 0);
@@ -1255,7 +1257,7 @@ static void drawable_free(DisplayChannel *display, Drawable *drawable)
     display->free_drawables = (_Drawable *)drawable;
 }
 
-void drawables_init(DisplayChannel *display)
+static void drawables_init(DisplayChannel *display)
 {
     int i;
 
@@ -1369,7 +1371,7 @@ static void drawable_deps_draw(DisplayChannel *display, Drawable *drawable)
     }
 }
 
-void drawable_draw(DisplayChannel *display, Drawable *drawable)
+static void drawable_draw(DisplayChannel *display, Drawable *drawable)
 {
     RedSurface *surface;
     SpiceCanvas *canvas;
