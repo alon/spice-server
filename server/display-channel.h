@@ -419,7 +419,4 @@ static inline void region_add_clip_rects(QRegion *rgn, SpiceClipRects *data)
     }
 }
 
-void drawable_draw(DisplayChannel *display, Drawable *item);
-void drawables_init(DisplayChannel *display);
-
 #endif /* DISPLAY_CHANNEL_H_ */
