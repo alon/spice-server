@@ -157,9 +157,9 @@ static PipeItem *dcc_get_tail(DisplayChannelClient *dcc)
     return (PipeItem*)ring_get_tail(&RED_CHANNEL_CLIENT(dcc)->pipe);
 }
 
-static inline void red_display_add_image_to_pixmap_cache(RedChannelClient *rcc,
-                                                         SpiceImage *image, SpiceImage *io_image,
-                                                         int is_lossy)
+static void red_display_add_image_to_pixmap_cache(RedChannelClient *rcc,
+                                                  SpiceImage *image, SpiceImage *io_image,
+                                                  int is_lossy)
 {
     DisplayChannel *display_channel = SPICE_CONTAINEROF(rcc->channel, DisplayChannel, common.base);
     DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
@@ -1646,8 +1646,8 @@ static int encode_frame(DisplayChannelClient *dcc, const SpiceRect *src,
     return TRUE;
 }
 
-static inline int red_marshall_stream_data(RedChannelClient *rcc,
-                  SpiceMarshaller *base_marshaller, Drawable *drawable)
+static int red_marshall_stream_data(RedChannelClient *rcc,
+                                    SpiceMarshaller *base_marshaller, Drawable *drawable)
 {
     DisplayChannelClient *dcc = RCC_TO_DCC(rcc);
     DisplayChannel *display = DCC_TO_DC(dcc);
