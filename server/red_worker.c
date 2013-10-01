@@ -266,149 +266,6 @@ void current_remove_all(DisplayChannel *display, int surface_id)
     }
 }
 
-static int red_display_drawable_is_in_pipe(DisplayChannelClient *dcc, Drawable *drawable)
-{
-    DrawablePipeItem *dpi;
-    RingItem *dpi_link, *dpi_next;
-
-    DRAWABLE_FOREACH_DPI_SAFE(drawable, dpi_link, dpi_next, dpi) {
-        if (dpi->dcc == dcc) {
-            return TRUE;
-        }
-    }
-
-    return FALSE;
-}
-
-/*
- * after red_display_detach_stream_gracefully is called for all the display channel clients,
- * detach_stream should be called. See comment (1).
- */
-static void dcc_detach_stream_gracefully(DisplayChannelClient *dcc,
-                                         Stream *stream,
-                                         Drawable *update_area_limit)
-{
-    DisplayChannel *display = DCC_TO_DC(dcc);
-    int stream_id = get_stream_id(display, stream);
-    StreamAgent *agent = &dcc->stream_agents[stream_id];
-
-    /* stopping the client from playing older frames at once*/
-    region_clear(&agent->clip);
-    dcc_stream_agent_clip(dcc, agent);
-
-    if (region_is_empty(&agent->vis_region)) {
-        spice_debug("stream %d: vis region empty", stream_id);
-        return;
-    }
-
-    if (stream->current &&
-        region_contains(&stream->current->tree_item.base.rgn, &agent->vis_region)) {
-        RedChannel *channel;
-        RedChannelClient *rcc;
-        UpgradeItem *upgrade_item;
-        int n_rects;
-
-        /* (1) The caller should detach the drawable from the stream. This will
-         * lead to sending the drawable losslessly, as an ordinary drawable. */
-        if (red_display_drawable_is_in_pipe(dcc, stream->current)) {
-            spice_debug("stream %d: upgrade by linked drawable. sized %d, box ==>",
-                        stream_id, stream->current->sized_stream != NULL);
-            rect_debug(&stream->current->red_drawable->bbox);
-            goto clear_vis_region;
-        }
-        spice_debug("stream %d: upgrade by drawable. sized %d, box ==>",
-                    stream_id, stream->current->sized_stream != NULL);
-        rect_debug(&stream->current->red_drawable->bbox);
-        rcc = RED_CHANNEL_CLIENT(dcc);
-        channel = rcc->channel;
-        upgrade_item = spice_new(UpgradeItem, 1);
-        upgrade_item->refs = 1;
-        red_channel_pipe_item_init(channel,
-                &upgrade_item->base, PIPE_ITEM_TYPE_UPGRADE);
-        upgrade_item->drawable = stream->current;
-        upgrade_item->drawable->refs++;
-        n_rects = pixman_region32_n_rects(&upgrade_item->drawable->tree_item.base.rgn);
-        upgrade_item->rects = spice_malloc_n_m(n_rects, sizeof(SpiceRect), sizeof(SpiceClipRects));
-        upgrade_item->rects->num_rects = n_rects;
-        region_ret_rects(&upgrade_item->drawable->tree_item.base.rgn,
-                         upgrade_item->rects->rects, n_rects);
-        red_channel_client_pipe_add(rcc, &upgrade_item->base);
-
-    } else {
-        SpiceRect upgrade_area;
-
-        region_extents(&agent->vis_region, &upgrade_area);
-        spice_debug("stream %d: upgrade by screenshot. has current %d. box ==>",
-                    stream_id, stream->current != NULL);
-        rect_debug(&upgrade_area);
-        if (update_area_limit) {
-            display_channel_draw_until(DCC_TO_DC(dcc), &upgrade_area, 0, update_area_limit);
-        } else {
-            display_channel_draw(DCC_TO_DC(dcc), &upgrade_area, 0);
-        }
-        dcc_add_surface_area_image(dcc, 0, &upgrade_area, NULL, FALSE);
-    }
-clear_vis_region:
-    region_clear(&agent->vis_region);
-}
-
-static void detach_stream_gracefully(DisplayChannel *display, Stream *stream,
-                                     Drawable *update_area_limit)
-{
-    RingItem *item, *next;
-    DisplayChannelClient *dcc;
-
-    FOREACH_DCC(display, item, next, dcc) {
-        dcc_detach_stream_gracefully(dcc, stream, update_area_limit);
-    }
-    if (stream->current) {
-        detach_stream(display, stream, TRUE);
-    }
-}
-
-/*
- * region  : a primary surface region. Streams that intersects with the given
- *           region will be detached.
- * drawable: If detaching the stream is triggered by the addition of a new drawable
- *           that is dependent on the given region, and the drawable is already a part
- *           of the "current tree", the drawable parameter should be set with
- *           this drawable, otherwise, it should be NULL. Then, if detaching the stream
- *           involves sending an upgrade image to the client, this drawable won't be rendered
- *           (see red_display_detach_stream_gracefully).
- */
-void detach_streams_behind(DisplayChannel *display, QRegion *region, Drawable *drawable)
-{
-    Ring *ring = &display->streams;
-    RingItem *item = ring_get_head(ring);
-    RingItem *dcc_ring_item, *next;
-    DisplayChannelClient *dcc;
-    bool is_connected = red_channel_is_connected(RED_CHANNEL(display));
-
-    while (item) {
-        Stream *stream = SPICE_CONTAINEROF(item, Stream, link);
-        int detach = 0;
-        item = ring_next(ring, item);
-
-        FOREACH_DCC(display, dcc_ring_item, next, dcc) {
-            StreamAgent *agent = &dcc->stream_agents[get_stream_id(display, stream)];
-
-            if (region_intersects(&agent->vis_region, region)) {
-                dcc_detach_stream_gracefully(dcc, stream, drawable);
-                detach = 1;
-                spice_debug("stream %d", get_stream_id(display, stream));
-            }
-        }
-        if (detach && stream->current) {
-            detach_stream(display, stream, TRUE);
-        } else if (!is_connected) {
-            if (stream->current &&
-                region_intersects(&stream->current->tree_item.base.rgn, region)) {
-                detach_stream(display, stream, TRUE);
-            }
-        }
-    }
-}
-
 static RedDrawable *red_drawable_new(void)
 {
     RedDrawable * red = spice_new0(RedDrawable, 1);
@@ -710,19 +567,6 @@ void red_disconnect_all_display_TODO_remove_me(RedChannel *channel)
     red_channel_apply_clients(channel, red_channel_client_disconnect);
 }
 
-static void detach_and_stop_streams(DisplayChannel *display)
-{
-    RingItem *stream_item;
-
-    spice_debug(NULL);
-    while ((stream_item = ring_get_head(&display->streams))) {
-        Stream *stream = SPICE_CONTAINEROF(stream_item, Stream, link);
-
-        detach_stream_gracefully(display, stream, NULL);
-        stream_stop(display, stream);
-    }
-}
-
 static void red_migrate_display(DisplayChannel *display, RedChannelClient *rcc)
 {
     /* We need to stop the streams, and to send upgrade_items to the client.
@@ -735,7 +579,7 @@ static void red_migrate_display(DisplayChannel *display, RedChannelClient *rcc)
      * Notice that detach_and_stop_streams won't lead to any dev ram changes, since
      * handle_dev_stop already took care of releasing all the dev ram resources.
      */
-    detach_and_stop_streams(display);
+    stream_detach_and_stop(display);
     if (red_channel_client_is_connected(rcc)) {
         red_channel_client_default_migrate(rcc);
     }
@@ -2005,22 +1849,6 @@ static gboolean worker_source_check(GSource *source)
     return worker->running /* TODO && worker->pending_process */;
 }
 
-static void display_channel_streams_timout(DisplayChannel *display)
-{
-    Ring *ring = &display->streams;
-    RingItem *item;
-
-    red_time_t now = red_get_monotonic_time();
-    item = ring_get_head(ring);
-    while (item) {
-        Stream *stream = SPICE_CONTAINEROF(item, Stream, link);
-        item = ring_next(ring, item);
-        if (now >= (stream->last_time + RED_STREAM_TIMOUT)) {
-            detach_stream_gracefully(display, stream, NULL);
-            stream_stop(display, stream);
-        }
-    }
-}
 static gboolean worker_source_dispatch(GSource *source, GSourceFunc callback,
                                        gpointer user_data)
 {
@@ -2036,7 +1864,7 @@ static gboolean worker_source_dispatch(GSource *source, GSourceFunc callback,
     display_channel_free_glz_drawables_to_free(display);
 
     /* FIXME: could use its own source */
-    display_channel_streams_timout(display);
+    stream_timout(display);
 
     worker->timeout = -1;
     red_process_cursor(worker, MAX_PIPE_SIZE, &ring_is_empty);
