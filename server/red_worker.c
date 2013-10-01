@@ -452,7 +452,7 @@ static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *
     return n;
 }
 
-static inline void red_push(RedWorker *worker)
+static void red_push(RedWorker *worker)
 {
     if (worker->cursor_channel) {
         red_channel_push(RED_CHANNEL(worker->cursor_channel));
@@ -491,7 +491,7 @@ static void red_migrate_display(DisplayChannel *display, RedChannelClient *rcc)
     }
 }
 
-static inline void flush_display_commands(RedWorker *worker)
+static void flush_display_commands(RedWorker *worker)
 {
     RedChannel *display_red_channel = RED_CHANNEL(worker->display_channel);
 
@@ -535,7 +535,7 @@ static inline void flush_display_commands(RedWorker *worker)
     }
 }
 
-static inline void flush_cursor_commands(RedWorker *worker)
+static void flush_cursor_commands(RedWorker *worker)
 {
     RedChannel *cursor_red_channel = RED_CHANNEL(worker->cursor_channel);
 
@@ -581,7 +581,7 @@ static inline void flush_cursor_commands(RedWorker *worker)
 // TODO: on timeout, don't disconnect all channels immediatly - try to disconnect the slowest ones
 // first and maybe turn timeouts to several timeouts in order to disconnect channels gradually.
 // Should use disconnect or shutdown?
-static inline void flush_all_qxl_commands(RedWorker *worker)
+static void flush_all_qxl_commands(RedWorker *worker)
 {
     flush_display_commands(worker);
     flush_cursor_commands(worker);
