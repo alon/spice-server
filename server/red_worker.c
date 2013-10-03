@@ -821,28 +821,6 @@ static void guest_set_client_capabilities(RedWorker *worker)
     worker->set_client_capabilities_pending = 0;
 }
 
-static void handle_new_display_channel(RedWorker *worker, RedClient *client, RedsStream *stream,
-                                       int migrate,
-                                       uint32_t *common_caps, int num_common_caps,
-                                       uint32_t *caps, int num_caps)
-{
-    DisplayChannel *display;
-    DisplayChannelClient *dcc;
-
-    spice_return_if_fail(worker->display_channel);
-
-    display = worker->display_channel;
-    spice_info("add display channel client");
-    dcc = dcc_new(display, client, stream, migrate,
-                  common_caps, num_common_caps, caps, num_caps,
-                  worker->image_compression, worker->jpeg_state, worker->zlib_glz_state);
-
-    display_channel_update_compression(display, dcc);
-
-    guest_set_client_capabilities(worker);
-    dcc_start(dcc);
-}
-
 static void handle_dev_update_async(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorker *worker = opaque;
@@ -1178,14 +1156,19 @@ static void handle_dev_display_connect(void *opaque, uint32_t message_type, void
 {
     RedWorkerMessageDisplayConnect *msg = payload;
     RedWorker *worker = opaque;
-    RedsStream *stream = msg->stream;
-    RedClient *client = msg->client;
-    int migration = msg->migration;
+    DisplayChannel *display = worker->display_channel;
+    DisplayChannelClient *dcc;
 
-    spice_info("connect");
-    handle_new_display_channel(worker, client, stream, migration,
-                               msg->common_caps, msg->num_common_caps,
-                               msg->caps, msg->num_caps);
+    spice_info("connect new client");
+    spice_return_if_fail(display);
+
+    dcc = dcc_new(display, msg->client, msg->stream, msg->migration,
+                  msg->common_caps, msg->num_common_caps, msg->caps, msg->num_caps,
+                  worker->image_compression, worker->jpeg_state, worker->zlib_glz_state);
+    display_channel_update_compression(display, dcc);
+    guest_set_client_capabilities(worker);
+    dcc_start(dcc);
+
     free(msg->caps);
     free(msg->common_caps);
 }
