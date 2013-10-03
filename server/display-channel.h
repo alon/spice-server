@@ -288,6 +288,10 @@ void                       display_channel_destroy_surfaces          (DisplayCha
 void                       display_channel_destroy_surface           (DisplayChannel *display,
                                                                       uint32_t surface_id);
 uint32_t                   display_channel_generate_uid              (DisplayChannel *display);
+void                       display_channel_process_surface_cmd       (DisplayChannel *display,
+                                                                      RedSurfaceCmd *surface,
+                                                                      uint32_t group_id,
+                                                                      int loadvm);
 
 static inline int validate_surface(DisplayChannel *display, uint32_t surface_id)
 {
