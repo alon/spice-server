@@ -792,3 +792,15 @@ void red_record_dev_input_primary_surface_create(FILE *fd,
     write_binary(fd, "data", line_0 ? abs(surface->stride)*surface->height : 0,
         line_0);
 }
+
+void red_record_event(FILE *fd, int what, uint32_t type, unsigned long ts)
+{
+    static int counter = 0;
+
+    // TODO: record the size of the packet in the header. This would make
+    // navigating it much faster (well, I can add an index while I'm at it..)
+    // and make it trivial to get a histogram from a file.
+    // But to implement that I would need some temporary buffer for each event.
+    // (that can be up to VGA_FRAMEBUFFER large)
+    fprintf(fd, "event %d %d %u %lu\n", counter++, what, type, ts);
+}

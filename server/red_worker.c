@@ -304,24 +304,10 @@ static int red_process_cursor(RedWorker *worker, uint32_t max_pipe_size, int *ri
     return n;
 }
 
-static void red_record_event(RedWorker *worker, int what, uint32_t type)
-{
-    struct timespec ts;
-    static int counter = 0;
-
-    // TODO: record the size of the packet in the header. This would make
-    // navigating it much faster (well, I can add an index while I'm at it..)
-    // and make it trivial to get a histogram from a file.
-    // But to implement that I would need some temporary buffer for each event.
-    // (that can be up to VGA_FRAMEBUFFER large)
-    clock_gettime(worker->clockid, &ts);
-    fprintf(worker->record_fd, "event %d %d %d %ld\n", counter++, what, type,
-        ts.tv_nsec + ts.tv_sec * 1000 * 1000 * 1000);
-}
-
 static void red_record_command(RedWorker *worker, QXLCommandExt ext_cmd)
 {
-    red_record_event(worker, 0, ext_cmd.cmd.type);
+    red_record_event(worker->record_fd, 0, ext_cmd.cmd.type, stat_now(worker->clockid));
+
     switch (ext_cmd.cmd.type) {
     case QXL_CMD_DRAW:
         red_record_drawable(worker->record_fd, &worker->mem_slots, ext_cmd.group_id,
@@ -1545,7 +1531,7 @@ static void worker_dispatcher_record(void *opaque, uint32_t message_type, void *
     RedWorker *worker = opaque;
 
     if (worker->record_fd) {
-        red_record_event(worker, 1, message_type);
+        red_record_event(worker->record_fd, 1, message_type, stat_now(worker->clockid));
     }
 }
 

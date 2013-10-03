@@ -41,4 +41,6 @@ void red_record_cursor_cmd(FILE *fd, RedMemSlotInfo *slots, int group_id,
 void red_record_dev_input_primary_surface_create(
                            FILE *fd, QXLDevSurfaceCreate *surface, uint8_t *line_0);
 
+void red_record_event(FILE *fd, int what, uint32_t type, unsigned long ts);
+
 #endif
