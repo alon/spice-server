@@ -826,31 +826,18 @@ static void handle_new_display_channel(RedWorker *worker, RedClient *client, Red
                                        uint32_t *common_caps, int num_common_caps,
                                        uint32_t *caps, int num_caps)
 {
-    DisplayChannel *display_channel;
+    DisplayChannel *display;
     DisplayChannelClient *dcc;
 
     spice_return_if_fail(worker->display_channel);
 
-    display_channel = worker->display_channel;
+    display = worker->display_channel;
     spice_info("add display channel client");
-    dcc = dcc_new(display_channel, client, stream, migrate,
+    dcc = dcc_new(display, client, stream, migrate,
                   common_caps, num_common_caps, caps, num_caps,
                   worker->image_compression, worker->jpeg_state, worker->zlib_glz_state);
 
-    if (dcc->jpeg_state == SPICE_WAN_COMPRESSION_AUTO) {
-        display_channel->enable_jpeg = dcc->common.is_low_bandwidth;
-    } else {
-        display_channel->enable_jpeg = (dcc->jpeg_state == SPICE_WAN_COMPRESSION_ALWAYS);
-    }
-
-    if (dcc->zlib_glz_state == SPICE_WAN_COMPRESSION_AUTO) {
-        display_channel->enable_zlib_glz_wrap = dcc->common.is_low_bandwidth;
-    } else {
-        display_channel->enable_zlib_glz_wrap = (dcc->zlib_glz_state ==
-                                                 SPICE_WAN_COMPRESSION_ALWAYS);
-    }
-    spice_info("jpeg %s", display_channel->enable_jpeg ? "enabled" : "disabled");
-    spice_info("zlib-over-glz %s", display_channel->enable_zlib_glz_wrap ? "enabled" : "disabled");
+    display_channel_update_compression(display, dcc);
 
     guest_set_client_capabilities(worker);
     dcc_start(dcc);

@@ -2026,3 +2026,20 @@ void display_channel_process_surface_cmd(DisplayChannel *display, RedSurfaceCmd 
     red_put_surface_cmd(surface);
     free(surface);
 }
+
+void display_channel_update_compression(DisplayChannel *display, DisplayChannelClient *dcc)
+{
+    if (dcc->jpeg_state == SPICE_WAN_COMPRESSION_AUTO) {
+        display->enable_jpeg = dcc->common.is_low_bandwidth;
+    } else {
+        display->enable_jpeg = (dcc->jpeg_state == SPICE_WAN_COMPRESSION_ALWAYS);
+    }
+
+    if (dcc->zlib_glz_state == SPICE_WAN_COMPRESSION_AUTO) {
+        display->enable_zlib_glz_wrap = dcc->common.is_low_bandwidth;
+    } else {
+        display->enable_zlib_glz_wrap = (dcc->zlib_glz_state == SPICE_WAN_COMPRESSION_ALWAYS);
+    }
+    spice_info("jpeg %s", display->enable_jpeg ? "enabled" : "disabled");
+    spice_info("zlib-over-glz %s", display->enable_zlib_glz_wrap ? "enabled" : "disabled");
+}
