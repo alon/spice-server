@@ -130,10 +130,6 @@ int red_get_update_cmd(RedMemSlotInfo *slots, int group_id,
                        RedUpdateCmd *red, QXLPHYSICAL addr);
 void red_put_update_cmd(RedUpdateCmd *red);
 
-int red_get_message(RedMemSlotInfo *slots, int group_id,
-                    RedMessage *red, QXLPHYSICAL addr);
-void red_put_message(RedMessage *red);
-
 int red_get_surface_cmd(RedMemSlotInfo *slots, int group_id,
                         RedSurfaceCmd *red, QXLPHYSICAL addr);
 void red_put_surface_cmd(RedSurfaceCmd *red);

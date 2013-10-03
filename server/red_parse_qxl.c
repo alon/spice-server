@@ -1181,32 +1181,6 @@ void red_put_update_cmd(RedUpdateCmd *red)
     /* nothing yet */
 }
 
-int red_get_message(RedMemSlotInfo *slots, int group_id,
-                    RedMessage *red, QXLPHYSICAL addr)
-{
-    QXLMessage *qxl;
-    int error;
-
-    /*
-     * security alert:
-     *   qxl->data[0] size isn't specified anywhere -> can't verify
-     *   luckily this is for debug logging only,
-     *   so we can just ignore it by default.
-     */
-    qxl = (QXLMessage *)memslot_get_virt(slots, addr, sizeof(*qxl), group_id, &error);
-    if (error) {
-        return 1;
-    }
-    red->release_info  = &qxl->release_info;
-    red->data          = qxl->data;
-    return 0;
-}
-
-void red_put_message(RedMessage *red)
-{
-    /* nothing yet */
-}
-
 int red_get_surface_cmd(RedMemSlotInfo *slots, int group_id,
                         RedSurfaceCmd *red, QXLPHYSICAL addr)
 {

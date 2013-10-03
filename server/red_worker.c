@@ -335,24 +335,6 @@ static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *
             red_put_update_cmd(&update);
             break;
         }
-        case QXL_CMD_MESSAGE: {
-            RedMessage message;
-            QXLReleaseInfoExt release_info_ext;
-
-            if (red_get_message(&worker->mem_slots, ext_cmd.group_id,
-                                &message, ext_cmd.cmd.data)) {
-                break;
-            }
-#ifdef DEBUG
-            /* alert: accessing message.data is insecure */
-            spice_warning("MESSAGE: %s", message.data);
-#endif
-            release_info_ext.group_id = ext_cmd.group_id;
-            release_info_ext.info = message.release_info;
-            worker->qxl->st->qif->release_resource(worker->qxl, release_info_ext);
-            red_put_message(&message);
-            break;
-        }
         case QXL_CMD_SURFACE: {
             RedSurfaceCmd *surface = spice_new0(RedSurfaceCmd, 1);
 
