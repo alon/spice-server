@@ -77,7 +77,7 @@ typedef struct RedWorker {
     spice_wan_compression_t jpeg_state;
     spice_wan_compression_t zlib_glz_state;
 
-    uint32_t process_commands_generation;
+    uint32_t process_display_generation;
 #ifdef RED_STATISTICS
     StatNodeRef stat;
     uint64_t *wakeup_counter;
@@ -182,35 +182,6 @@ static RedDrawable *red_drawable_new(RedWorker *worker)
     return red;
 }
 
-static bool red_process_draw(RedWorker *worker, QXLCommandExt *ext_cmd)
-{
-    DisplayChannel *display = worker->display_channel;
-    RedDrawable *red_drawable = NULL;
-    Drawable *drawable = NULL;
-    bool success = FALSE;
-
-    drawable = display_channel_drawable_try_new(display, ext_cmd->group_id,
-                                                worker->process_commands_generation);
-    if (!drawable)
-        goto end;
-
-    red_drawable = red_drawable_new(worker);
-    if (red_get_drawable(&worker->mem_slots, ext_cmd->group_id,
-                         red_drawable, ext_cmd->cmd.data, ext_cmd->flags) != 0)
-        goto end;
-
-    success = display_channel_add_drawable(worker->display_channel, drawable, red_drawable);
-    spice_warn_if_fail(success);
-
-end:
-    if (drawable != NULL)
-        display_channel_drawable_unref(display, drawable);
-    if (red_drawable != NULL)
-        red_drawable_unref(worker, red_drawable, ext_cmd->group_id);
-    return success;
-}
-
-
 static int red_process_cursor(RedWorker *worker, uint32_t max_pipe_size, int *ring_is_empty)
 {
     QXLCommandExt ext_cmd;
@@ -261,7 +232,36 @@ static int red_process_cursor(RedWorker *worker, uint32_t max_pipe_size, int *ri
     return n;
 }
 
-static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *ring_is_empty)
+static bool red_process_draw(RedWorker *worker, QXLCommandExt *ext_cmd)
+{
+    DisplayChannel *display = worker->display_channel;
+    RedDrawable *red_drawable = NULL;
+    Drawable *drawable = NULL;
+    bool success = FALSE;
+
+    drawable = display_channel_drawable_try_new(display, ext_cmd->group_id,
+                                                worker->process_display_generation);
+    if (!drawable)
+        goto end;
+
+    red_drawable = red_drawable_new(worker);
+    if (red_get_drawable(&worker->mem_slots, ext_cmd->group_id,
+                         red_drawable, ext_cmd->cmd.data, ext_cmd->flags) != 0)
+        goto end;
+
+    success = display_channel_add_drawable(worker->display_channel, drawable, red_drawable);
+    spice_warn_if_fail(success);
+
+ end:
+    if (drawable != NULL)
+        display_channel_drawable_unref(display, drawable);
+    if (red_drawable != NULL)
+        red_drawable_unref(worker, red_drawable, ext_cmd->group_id);
+    return success;
+}
+
+
+static int red_process_display(RedWorker *worker, uint32_t max_pipe_size, int *ring_is_empty)
 {
     QXLCommandExt ext_cmd;
     int n = 0;
@@ -271,7 +271,7 @@ static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *
         return n;
     }
 
-    worker->process_commands_generation++;
+    worker->process_display_generation++;
     *ring_is_empty = FALSE;
     for (;;) {
 
@@ -403,12 +403,12 @@ static void flush_display_commands(RedWorker *worker)
         uint64_t end_time;
         int ring_is_empty;
 
-        red_process_commands(worker, MAX_PIPE_SIZE, &ring_is_empty);
+        red_process_display(worker, MAX_PIPE_SIZE, &ring_is_empty);
         if (ring_is_empty) {
             break;
         }
 
-        while (red_process_commands(worker, MAX_PIPE_SIZE, &ring_is_empty)) {
+        while (red_process_display(worker, MAX_PIPE_SIZE, &ring_is_empty)) {
             red_channel_push(RED_CHANNEL(worker->display_channel));
         }
 
@@ -1077,7 +1077,7 @@ static void handle_dev_oom(void *opaque, uint32_t message_type, void *payload)
                 worker->display_channel ?
                 red_channel_sum_pipes_size(display_red_channel) : 0);
 #endif
-    while (red_process_commands(worker, MAX_PIPE_SIZE, &ring_is_empty)) {
+    while (red_process_display(worker, MAX_PIPE_SIZE, &ring_is_empty)) {
         red_channel_push(&worker->display_channel->common.base);
     }
     if (worker->qxl->st->qif->flush_resources(worker->qxl) == 0) {
@@ -1649,7 +1649,7 @@ static gboolean worker_source_dispatch(GSource *source, GSourceFunc callback,
 
     worker->timeout = -1;
     red_process_cursor(worker, MAX_PIPE_SIZE, &ring_is_empty);
-    red_process_commands(worker, MAX_PIPE_SIZE, &ring_is_empty);
+    red_process_display(worker, MAX_PIPE_SIZE, &ring_is_empty);
 
     /* FIXME: remove me? that should be handled by watch out condition */
     red_push(worker);
