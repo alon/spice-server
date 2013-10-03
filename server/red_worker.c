@@ -202,12 +202,12 @@ static int red_process_cursor(RedWorker *worker, uint32_t max_pipe_size, int *ri
                 worker->timeout = worker->timeout == -1 ?
                     CMD_RING_POLL_TIMEOUT :
                     MIN(worker->timeout, CMD_RING_POLL_TIMEOUT);
-                break;
+                return n;
             }
             if (worker->cursor_poll_tries > CMD_RING_POLL_RETRIES ||
                 worker->qxl->st->qif->req_cursor_notification(worker->qxl)) {
                 worker->cursor_poll_tries++;
-                break;
+                return n;
             }
             continue;
         }
@@ -297,12 +297,12 @@ static int red_process_display(RedWorker *worker, uint32_t max_pipe_size, int *r
                 worker->timeout = worker->timeout == -1 ?
                     CMD_RING_POLL_TIMEOUT :
                     MIN(worker->timeout, CMD_RING_POLL_TIMEOUT);
-                break;
+                return n;
             }
             if (worker->display_poll_tries > CMD_RING_POLL_RETRIES ||
                          worker->qxl->st->qif->req_cmd_notification(worker->qxl)) {
                 worker->display_poll_tries++;
-                break;
+                return n;
             }
             continue;
         }
