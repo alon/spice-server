@@ -292,6 +292,8 @@ void                       display_channel_process_surface_cmd       (DisplayCha
                                                                       RedSurfaceCmd *surface,
                                                                       uint32_t group_id,
                                                                       int loadvm);
+void                       display_channel_update_compression        (DisplayChannel *display,
+                                                                      DisplayChannelClient *dcc);
 
 static inline int validate_surface(DisplayChannel *display, uint32_t surface_id)
 {
