@@ -804,3 +804,24 @@ void red_record_event(FILE *fd, int what, uint32_t type, unsigned long ts)
     // (that can be up to VGA_FRAMEBUFFER large)
     fprintf(fd, "event %d %d %u %lu\n", counter++, what, type, ts);
 }
+
+void red_record_qxl_command(FILE *fd, RedMemSlotInfo *slots,
+                            QXLCommandExt ext_cmd, unsigned long ts)
+{
+    red_record_event(fd, 0, ext_cmd.cmd.type, ts);
+
+    switch (ext_cmd.cmd.type) {
+    case QXL_CMD_DRAW:
+        red_record_drawable(fd, slots, ext_cmd.group_id, ext_cmd.cmd.data, ext_cmd.flags);
+        break;
+    case QXL_CMD_UPDATE:
+        red_record_update_cmd(fd, slots, ext_cmd.group_id, ext_cmd.cmd.data);
+        break;
+    case QXL_CMD_MESSAGE:
+        red_record_message(fd, slots, ext_cmd.group_id, ext_cmd.cmd.data);
+        break;
+    case QXL_CMD_SURFACE:
+        red_record_surface_cmd(fd, slots, ext_cmd.group_id, ext_cmd.cmd.data);
+        break;
+    }
+}

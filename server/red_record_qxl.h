@@ -23,24 +23,12 @@
 #include "common.h"
 #include "memslot.h"
 
-void red_record_drawable(FILE *fd, RedMemSlotInfo *slots, int group_id,
-                         QXLPHYSICAL addr, uint32_t flags);
-
-void red_record_update_cmd(FILE *fd, RedMemSlotInfo *slots, int group_id,
-                           QXLPHYSICAL addr);
-
-void red_record_message(FILE *fd, RedMemSlotInfo *slots, int group_id,
-                        QXLPHYSICAL addr);
-
-void red_record_surface_cmd(FILE *fd, RedMemSlotInfo *slots, int group_id,
-                            QXLPHYSICAL addr);
-
-void red_record_cursor_cmd(FILE *fd, RedMemSlotInfo *slots, int group_id,
-                           QXLPHYSICAL addr);
-
 void red_record_dev_input_primary_surface_create(
                            FILE *fd, QXLDevSurfaceCreate *surface, uint8_t *line_0);
 
 void red_record_event(FILE *fd, int what, uint32_t type, unsigned long ts);
+
+void red_record_qxl_command(FILE *fd, RedMemSlotInfo *slots,
+                            QXLCommandExt ext_cmd, unsigned long ts);
 
 #endif
