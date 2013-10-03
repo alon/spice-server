@@ -1984,3 +1984,45 @@ DisplayChannel* display_channel_new(RedWorker *worker, int migrate, uint32_t n_s
 
     return display;
 }
+
+void display_channel_process_surface_cmd(DisplayChannel *display, RedSurfaceCmd *surface,
+                                         uint32_t group_id, int loadvm)
+{
+    int surface_id;
+    RedSurface *red_surface;
+    uint8_t *data;
+
+    surface_id = surface->surface_id;
+    spice_return_if_fail(surface_id < display->n_surfaces);
+
+    red_surface = &display->surfaces[surface_id];
+
+    switch (surface->type) {
+    case QXL_SURFACE_CMD_CREATE: {
+        uint32_t height = surface->u.surface_create.height;
+        int32_t stride = surface->u.surface_create.stride;
+        int reloaded_surface = loadvm || (surface->flags & QXL_SURF_FLAG_KEEP_DATA);
+
+        data = surface->u.surface_create.data;
+        if (stride < 0) {
+            data -= (int32_t)(stride * (height - 1));
+        }
+        display_channel_create_surface(display, surface_id, surface->u.surface_create.width,
+                                       height, stride, surface->u.surface_create.format, data,
+                                       reloaded_surface,
+                                       // reloaded surfaces will be sent on demand
+                                       !reloaded_surface);
+        display_channel_set_surface_release_info(display, surface_id, 1, surface->release_info, group_id);
+        break;
+    }
+    case QXL_SURFACE_CMD_DESTROY:
+        spice_warn_if(!red_surface->context.canvas);
+        display_channel_set_surface_release_info(display, surface_id, 0, surface->release_info, group_id);
+        display_channel_destroy_surface(display, surface_id);
+        break;
+    default:
+        spice_warn_if_reached();
+    };
+    red_put_surface_cmd(surface);
+    free(surface);
+}
