@@ -109,7 +109,7 @@ RedMemSlotInfo* red_worker_get_memslot(RedWorker *worker);
 void red_drawable_unref(RedWorker *worker, RedDrawable *red_drawable,
                         uint32_t group_id);
 
-RedChannel *red_worker_new_channel(RedWorker *worker, int size,
+CommonChannel *red_worker_new_channel(RedWorker *worker, int size,
                                    const char *name,
                                    uint32_t channel_type, int migration_flags,
                                    ChannelCbs *channel_cbs,

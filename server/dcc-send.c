@@ -1994,12 +1994,10 @@ static void red_marshall_image(RedChannelClient *rcc, SpiceMarshaller *m, ImageI
 
     if (lossy_comp) {
         comp_succeeded = dcc_compress_image_jpeg(dcc, &red_image, &bitmap, &comp_send_data, groupid);
+    } else if (!lz_comp) {
+        comp_succeeded = dcc_compress_image_quic(dcc, &red_image, &bitmap, &comp_send_data, groupid);
     } else {
-        if (!lz_comp) {
-            comp_succeeded = dcc_compress_image_quic(dcc, &red_image, &bitmap, &comp_send_data, groupid);
-        } else {
-            comp_succeeded = dcc_compress_image_lz(dcc, &red_image, &bitmap, &comp_send_data, groupid);
-        }
+        comp_succeeded = dcc_compress_image_lz(dcc, &red_image, &bitmap, &comp_send_data, groupid);
     }
 
     surface_lossy_region = &dcc->surface_client_lossy_region[item->surface_id];
