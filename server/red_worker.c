@@ -304,30 +304,6 @@ static int red_process_cursor(RedWorker *worker, uint32_t max_pipe_size, int *ri
     return n;
 }
 
-static void red_record_command(RedWorker *worker, QXLCommandExt ext_cmd)
-{
-    red_record_event(worker->record_fd, 0, ext_cmd.cmd.type, stat_now(worker->clockid));
-
-    switch (ext_cmd.cmd.type) {
-    case QXL_CMD_DRAW:
-        red_record_drawable(worker->record_fd, &worker->mem_slots, ext_cmd.group_id,
-                            ext_cmd.cmd.data, ext_cmd.flags);
-        break;
-    case QXL_CMD_UPDATE:
-        red_record_update_cmd(worker->record_fd, &worker->mem_slots, ext_cmd.group_id,
-                           ext_cmd.cmd.data);
-        break;
-    case QXL_CMD_MESSAGE:
-        red_record_message(worker->record_fd, &worker->mem_slots, ext_cmd.group_id,
-                           ext_cmd.cmd.data);
-        break;
-    case QXL_CMD_SURFACE:
-        red_record_surface_cmd(worker->record_fd, &worker->mem_slots, ext_cmd.group_id,
-                               ext_cmd.cmd.data);
-        break;
-    }
-}
-
 static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *ring_is_empty)
 {
     QXLCommandExt ext_cmd;
@@ -373,9 +349,11 @@ static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *
             }
             continue;
         }
-        if (worker->record_fd) {
-            red_record_command(worker, ext_cmd);
-        }
+
+        if (worker->record_fd)
+            red_record_qxl_command(worker->record_fd, &worker->mem_slots, ext_cmd,
+                                   stat_now(worker->clockid));
+
         stat_inc_counter(worker->command_counter, 1);
         worker->display_poll_tries = 0;
         switch (ext_cmd.cmd.type) {
