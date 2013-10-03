@@ -412,7 +412,7 @@ static void cursor_channel_release_item(RedChannelClient *rcc, PipeItem *item, i
 CursorChannel* cursor_channel_new(RedWorker *worker)
 {
     CursorChannel *cursor;
-    RedChannel *channel = NULL;
+    CommonChannel *channel = NULL;
     ChannelCbs cbs = {
         .on_disconnect =  cursor_channel_client_on_disconnect,
         .send_item = cursor_channel_send_item,
