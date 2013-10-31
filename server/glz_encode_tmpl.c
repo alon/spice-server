@@ -144,7 +144,7 @@
 /* returns the length of the match. 0 if no match.
   if image_distance = 0, pixel_distance is the distance between the matching pixels.
   Otherwise, it is the offset from the beginning of the referred image */
-static INLINE size_t FNAME(do_match)(SharedDictionary *dict,
+static inline size_t FNAME(do_match)(SharedDictionary *dict,
                                      WindowImageSegment *ref_seg, const PIXEL *ref,
                                      const PIXEL *ref_limit,
                                      WindowImageSegment *ip_seg,  const PIXEL *ip,

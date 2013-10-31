@@ -49,7 +49,7 @@ typedef struct Encoder {
 /**************************************************************************
 * Handling writing the encoded image to the output buffer
 ***************************************************************************/
-static INLINE int more_io_bytes(Encoder *encoder)
+static inline int more_io_bytes(Encoder *encoder)
 {
     uint8_t *io_ptr;
     int num_io_bytes = encoder->usr->more_space(encoder->usr, &io_ptr);
@@ -59,7 +59,7 @@ static INLINE int more_io_bytes(Encoder *encoder)
     return num_io_bytes;
 }
 
-static INLINE void encode(Encoder *encoder, uint8_t byte)
+static inline void encode(Encoder *encoder, uint8_t byte)
 {
     if (encoder->io.now == encoder->io.end) {
         if (more_io_bytes(encoder) <= 0) {
@@ -72,7 +72,7 @@ static INLINE void encode(Encoder *encoder, uint8_t byte)
     *(encoder->io.now++) = byte;
 }
 
-static INLINE void encode_32(Encoder *encoder, unsigned int word)
+static inline void encode_32(Encoder *encoder, unsigned int word)
 {
     encode(encoder, (uint8_t)(word >> 24));
     encode(encoder, (uint8_t)(word >> 16) & 0x0000ff);
@@ -80,26 +80,26 @@ static INLINE void encode_32(Encoder *encoder, unsigned int word)
     encode(encoder, (uint8_t)(word & 0x0000ff));
 }
 
-static INLINE void encode_64(Encoder *encoder, uint64_t word)
+static inline void encode_64(Encoder *encoder, uint64_t word)
 {
     encode_32(encoder, (uint32_t)(word >> 32));
     encode_32(encoder, (uint32_t)(word & 0xffffff));
 }
 
-static INLINE void encode_copy_count(Encoder *encoder, uint8_t copy_count)
+static inline void encode_copy_count(Encoder *encoder, uint8_t copy_count)
 {
     encode(encoder, copy_count);
     encoder->io.last_copy = encoder->io.now - 1; // io_now cannot be the first byte of the buffer
 }
 
-static INLINE void update_copy_count(Encoder *encoder, uint8_t copy_count)
+static inline void update_copy_count(Encoder *encoder, uint8_t copy_count)
 {
     GLZ_ASSERT(encoder->usr, encoder->io.last_copy);
     *(encoder->io.last_copy) = copy_count;
 }
 
 // decrease the io ptr by 1
-static INLINE void compress_output_prev(Encoder *encoder)
+static inline void compress_output_prev(Encoder *encoder)
 {
     // io_now cannot be the first byte of the buffer
     encoder->io.now--;
