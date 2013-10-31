@@ -55,7 +55,5 @@ struct GlzEncoderUsrContext {
 
 #endif
 
-#define INLINE inline
-
 
 #endif

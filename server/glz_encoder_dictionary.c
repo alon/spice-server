@@ -27,7 +27,7 @@
 
 /* turning all used images to free ones. If they are alive, calling the free_image callback for
    each one */
-static INLINE void __glz_dictionary_window_reset_images(SharedDictionary *dict)
+static inline void __glz_dictionary_window_reset_images(SharedDictionary *dict)
 {
     WindowImage *tmp;
 
@@ -108,7 +108,7 @@ static void glz_dictionary_window_reset(SharedDictionary *dict)
     __glz_dictionary_window_reset_images(dict);
 }
 
-static INLINE void glz_dictionary_reset_hash(SharedDictionary *dict)
+static inline void glz_dictionary_reset_hash(SharedDictionary *dict)
 {
     memset(dict->htab, 0, sizeof(HashEntry) * HASH_SIZE * HASH_CHAIN_SIZE);
 #ifdef CHAINED_HASH
@@ -116,7 +116,7 @@ static INLINE void glz_dictionary_reset_hash(SharedDictionary *dict)
 #endif
 }
 
-static INLINE void glz_dictionary_window_destroy(SharedDictionary *dict)
+static inline void glz_dictionary_window_destroy(SharedDictionary *dict)
 {
     __glz_dictionary_window_reset_images(dict);
 
@@ -139,7 +139,7 @@ static INLINE void glz_dictionary_window_destroy(SharedDictionary *dict)
 }
 
 /* logic removal only */
-static INLINE void glz_dictionary_window_kill_image(SharedDictionary *dict, WindowImage *image)
+static inline void glz_dictionary_window_kill_image(SharedDictionary *dict, WindowImage *image)
 {
     image->is_alive = FALSE;
 }
@@ -255,7 +255,7 @@ void glz_enc_dictionary_remove_image(GlzEncDictContext *opaque_dict,
  Mutators of the window. Should be called by the encoder before and after encoding.
  ***********************************************************************************/
 
-static INLINE int __get_pixels_num(LzImageType image_type, unsigned int num_lines, int stride)
+static inline int __get_pixels_num(LzImageType image_type, unsigned int num_lines, int stride)
 {
     if (IS_IMAGE_TYPE_RGB[image_type]) {
         return num_lines * stride / RGB_BYTES_PER_PIXEL[image_type];
@@ -356,7 +356,7 @@ static uint32_t __glz_dictionary_window_alloc_image_seg(SharedDictionary *dict)
 }
 
 /* moves image to free list and "kill" it. Calls the free_image callback if was alive. */
-static INLINE void __glz_dictionary_window_free_image(SharedDictionary *dict, WindowImage *image)
+static inline void __glz_dictionary_window_free_image(SharedDictionary *dict, WindowImage *image)
 {
     if (image->is_alive) {
         dict->cur_usr->free_image(dict->cur_usr, image->usr_context);
@@ -367,7 +367,7 @@ static INLINE void __glz_dictionary_window_free_image(SharedDictionary *dict, Wi
 }
 
 /* moves all the segments that were associated with the images to the free segments */
-static INLINE void __glz_dictionary_window_free_image_segs(SharedDictionary *dict,
+static inline void __glz_dictionary_window_free_image_segs(SharedDictionary *dict,
                                                            WindowImage *image)
 {
     uint32_t old_free_head = dict->window.free_segs_head;
@@ -423,7 +423,7 @@ static WindowImage *glz_dictionary_window_get_new_head(SharedDictionary *dict, i
     return cur_head;
 }
 
-static INLINE int glz_dictionary_is_in_use(SharedDictionary *dict)
+static inline int glz_dictionary_is_in_use(SharedDictionary *dict)
 {
     uint32_t i = 0;
     for (i = 0; i < dict->max_encoders; i++) {
