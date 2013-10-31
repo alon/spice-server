@@ -482,7 +482,12 @@ static int inputs_channel_handle_parsed(RedChannelClient *rcc, uint32_t size, ui
 static void inputs_release_keys(void)
 {
     int i;
-    SpiceKbdState *st = keyboard->st;
+    SpiceKbdState *st;
+    
+    if (!keyboard) {
+        return;
+    }
+    st = keyboard->st;
 
     for (i = 0; i < SPICE_N_ELEMENTS(st->key); i++) {
         if (!st->key[i])
