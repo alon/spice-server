@@ -54,7 +54,6 @@
 typedef struct RedCompressBuf RedCompressBuf;
 struct RedCompressBuf {
     uint8_t buf[64 * 1024];
-    RedCompressBuf *next;
     RedCompressBuf *send_next;
 };
 
@@ -162,8 +161,6 @@ struct _DisplayChannelClient {
     struct {
         uint32_t stream_outbuf_size;
         uint8_t *stream_outbuf; // caution stream buffer is also used as compress bufs!!!
-
-        RedCompressBuf *used_compress_bufs;
 
         FreeList free_list;
         uint64_t pixmap_cache_items[MAX_DRAWABLE_PIXMAP_CACHE_ITEMS];
