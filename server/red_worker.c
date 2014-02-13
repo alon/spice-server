@@ -3455,16 +3455,27 @@ static void red_push_surface_image(DisplayChannelClient *dcc, int surface_id)
     red_channel_client_push(RED_CHANNEL_CLIENT(dcc));
 }
 
+static RedCompressBuf *compress_buf_new(void)
+{
+    return g_slice_new(RedCompressBuf);
+}
+
+static void compress_buf_free(RedCompressBuf *buf)
+{
+    g_slice_free(RedCompressBuf, buf);
+}
+
 static void marshaller_add_compressed(SpiceMarshaller *m,
                                       RedCompressBuf *comp_buf, size_t size)
 {
     size_t max = size;
     size_t now;
     do {
-        spice_assert(comp_buf);
+        spice_return_if_fail(comp_buf);
         now = MIN(sizeof(comp_buf->buf), max);
         max -= now;
-        spice_marshaller_add_ref(m, (uint8_t*)comp_buf->buf, now);
+        spice_marshaller_add_ref_full(m, (uint8_t*)comp_buf->buf, now,
+                                      (spice_marshaller_item_free_func)compress_buf_free, NULL);
         comp_buf = comp_buf->send_next;
     } while (max);
 }
@@ -3505,66 +3516,6 @@ static inline void fill_palette(DisplayChannelClient *dcc,
         if (red_palette_cache_add(dcc, palette->unique, 1)) {
             *flags |= SPICE_BITMAP_FLAGS_PAL_CACHE_ME;
         }
-    }
-}
-
-static inline RedCompressBuf *red_display_alloc_compress_buf(DisplayChannelClient *dcc)
-{
-    DisplayChannel *display_channel = DCC_TO_DC(dcc);
-    RedCompressBuf *ret;
-
-    if (display_channel->free_compress_bufs) {
-        ret = display_channel->free_compress_bufs;
-        display_channel->free_compress_bufs = ret->next;
-    } else {
-        ret = spice_new(RedCompressBuf, 1);
-    }
-
-    ret->next = dcc->send_data.used_compress_bufs;
-    dcc->send_data.used_compress_bufs = ret;
-    return ret;
-}
-
-static inline void __red_display_free_compress_buf(DisplayChannel *dc,
-                                                   RedCompressBuf *buf)
-{
-    buf->next = dc->free_compress_bufs;
-    dc->free_compress_bufs = buf;
-}
-
-static void red_display_free_compress_buf(DisplayChannelClient *dcc,
-                                          RedCompressBuf *buf)
-{
-    DisplayChannel *display_channel = DCC_TO_DC(dcc);
-    RedCompressBuf **curr_used = &dcc->send_data.used_compress_bufs;
-
-    for (;;) {
-        spice_assert(*curr_used);
-        if (*curr_used == buf) {
-            *curr_used = buf->next;
-            break;
-        }
-        curr_used = &(*curr_used)->next;
-    }
-    __red_display_free_compress_buf(display_channel, buf);
-}
-
-static void red_display_reset_compress_buf(DisplayChannelClient *dcc)
-{
-    while (dcc->send_data.used_compress_bufs) {
-        RedCompressBuf *buf = dcc->send_data.used_compress_bufs;
-        dcc->send_data.used_compress_bufs = buf->next;
-        __red_display_free_compress_buf(DCC_TO_DC(dcc), buf);
-    }
-}
-
-static void red_display_destroy_compress_bufs(DisplayChannel *display_channel)
-{
-    spice_assert(!red_channel_is_connected(RED_CHANNEL(display_channel)));
-    while (display_channel->free_compress_bufs) {
-        RedCompressBuf *buf = display_channel->free_compress_bufs;
-        display_channel->free_compress_bufs = buf->next;
-        free(buf);
     }
 }
 
@@ -3892,9 +3843,7 @@ static int encoder_usr_more_space(EncoderData *enc_data, uint8_t **io_ptr)
 {
     RedCompressBuf *buf;
 
-    if (!(buf = red_display_alloc_compress_buf(enc_data->dcc))) {
-        return 0;
-    }
+    buf = compress_buf_new();
     enc_data->bufs_tail->send_next = buf;
     enc_data->bufs_tail = buf;
     buf->send_next = NULL;
@@ -4124,7 +4073,7 @@ static inline int red_glz_compress_image(DisplayChannelClient *dcc,
     int glz_size;
     int zlib_size;
 
-    glz_data->data.bufs_tail = red_display_alloc_compress_buf(dcc);
+    glz_data->data.bufs_tail = compress_buf_new();
     glz_data->data.bufs_head = glz_data->data.bufs_tail;
 
     if (!glz_data->data.bufs_head) {
@@ -4145,7 +4094,7 @@ static inline int red_glz_compress_image(DisplayChannelClient *dcc,
 
     glz_size = glz_encode(dcc->glz, type, src->x, src->y,
                           (src->flags & SPICE_BITMAP_FLAGS_TOP_DOWN), NULL, 0,
-                          src->stride, (uint8_t*)glz_data->data.bufs_head->buf,
+                          src->stride, glz_data->data.bufs_head->buf,
                           sizeof(glz_data->data.bufs_head->buf),
                           glz_drawable_instance,
                           &glz_drawable_instance->glz_instance);
@@ -4160,7 +4109,7 @@ static inline int red_glz_compress_image(DisplayChannelClient *dcc,
 #endif
     zlib_data = &worker->zlib_data;
 
-    zlib_data->data.bufs_tail = red_display_alloc_compress_buf(dcc);
+    zlib_data->data.bufs_tail = compress_buf_new();
     zlib_data->data.bufs_head = zlib_data->data.bufs_tail;
 
     if (!zlib_data->data.bufs_head) {
@@ -4175,7 +4124,7 @@ static inline int red_glz_compress_image(DisplayChannelClient *dcc,
     zlib_data->data.u.compressed_data.size_left = glz_size;
 
     zlib_size = zlib_encode(worker->zlib, display_channel->zlib_level,
-                            glz_size, (uint8_t*)zlib_data->data.bufs_head->buf,
+                            glz_size, zlib_data->data.bufs_head->buf,
                             sizeof(zlib_data->data.bufs_head->buf));
 
     // the compressed buffer is bigger than the original data
@@ -4183,7 +4132,7 @@ static inline int red_glz_compress_image(DisplayChannelClient *dcc,
         while (zlib_data->data.bufs_head) {
             RedCompressBuf *buf = zlib_data->data.bufs_head;
             zlib_data->data.bufs_head = buf->send_next;
-            red_display_free_compress_buf(dcc, buf);
+            compress_buf_free(buf);
         }
         goto glz;
     }
@@ -4222,7 +4171,7 @@ static inline int red_lz_compress_image(DisplayChannelClient *dcc,
     stat_time_t start_time = stat_now(worker);
 #endif
 
-    lz_data->data.bufs_tail = red_display_alloc_compress_buf(dcc);
+    lz_data->data.bufs_tail = compress_buf_new();
     lz_data->data.bufs_head = lz_data->data.bufs_tail;
 
     if (!lz_data->data.bufs_head) {
@@ -4236,7 +4185,7 @@ static inline int red_lz_compress_image(DisplayChannelClient *dcc,
         while (lz_data->data.bufs_head) {
             RedCompressBuf *buf = lz_data->data.bufs_head;
             lz_data->data.bufs_head = buf->send_next;
-            red_display_free_compress_buf(dcc, buf);
+            compress_buf_free(buf);
         }
         return FALSE;
     }
@@ -4250,7 +4199,7 @@ static inline int red_lz_compress_image(DisplayChannelClient *dcc,
     size = lz_encode(lz, type, src->x, src->y,
                      !!(src->flags & SPICE_BITMAP_FLAGS_TOP_DOWN),
                      NULL, 0, src->stride,
-                     (uint8_t*)lz_data->data.bufs_head->buf,
+                     lz_data->data.bufs_head->buf,
                      sizeof(lz_data->data.bufs_head->buf));
 
     // the compressed buffer is bigger than the original data
@@ -4325,7 +4274,7 @@ static int red_jpeg_compress_image(DisplayChannelClient *dcc, SpiceImage *dest,
         return FALSE;
     }
 
-    jpeg_data->data.bufs_tail = red_display_alloc_compress_buf(dcc);
+    jpeg_data->data.bufs_tail = compress_buf_new();
     jpeg_data->data.bufs_head = jpeg_data->data.bufs_tail;
 
     if (!jpeg_data->data.bufs_head) {
@@ -4340,7 +4289,7 @@ static int red_jpeg_compress_image(DisplayChannelClient *dcc, SpiceImage *dest,
         while (jpeg_data->data.bufs_head) {
             RedCompressBuf *buf = jpeg_data->data.bufs_head;
             jpeg_data->data.bufs_head = buf->send_next;
-            red_display_free_compress_buf(dcc, buf);
+            compress_buf_free(buf);
         }
         return FALSE;
     }
@@ -4363,7 +4312,7 @@ static int red_jpeg_compress_image(DisplayChannelClient *dcc, SpiceImage *dest,
     }
     jpeg_size = jpeg_encode(jpeg, display_channel->jpeg_quality, jpeg_in_type,
                             src->x, src->y, NULL,
-                            0, stride, (uint8_t*)jpeg_data->data.bufs_head->buf,
+                            0, stride, jpeg_data->data.bufs_head->buf,
                             sizeof(jpeg_data->data.bufs_head->buf));
 
     // the compressed buffer is bigger than the original data
@@ -4389,7 +4338,7 @@ static int red_jpeg_compress_image(DisplayChannelClient *dcc, SpiceImage *dest,
 
     comp_head_filled = jpeg_size % sizeof(lz_data->data.bufs_head->buf);
     comp_head_left = sizeof(lz_data->data.bufs_head->buf) - comp_head_filled;
-    lz_out_start_byte = ((uint8_t *)lz_data->data.bufs_head->buf) + comp_head_filled;
+    lz_out_start_byte = lz_data->data.bufs_head->buf + comp_head_filled;
 
     lz_data->data.dcc = dcc;
 
@@ -4459,13 +4408,8 @@ static inline int red_quic_compress_image(DisplayChannelClient *dcc, SpiceImage 
         return FALSE;
     }
 
-    quic_data->data.bufs_tail = red_display_alloc_compress_buf(dcc);
+    quic_data->data.bufs_tail = compress_buf_new();
     quic_data->data.bufs_head = quic_data->data.bufs_tail;
-
-    if (!quic_data->data.bufs_head) {
-        return FALSE;
-    }
-
     quic_data->data.bufs_head->send_next = NULL;
     quic_data->data.dcc = dcc;
 
@@ -4473,7 +4417,7 @@ static inline int red_quic_compress_image(DisplayChannelClient *dcc, SpiceImage 
         while (quic_data->data.bufs_head) {
             RedCompressBuf *buf = quic_data->data.bufs_head;
             quic_data->data.bufs_head = buf->send_next;
-            red_display_free_compress_buf(dcc, buf);
+            compress_buf_free(buf);
         }
         return FALSE;
     }
@@ -4930,7 +4874,6 @@ static void fill_attr(SpiceMarshaller *m, SpiceLineAttr *attr, uint32_t group_id
 
 static inline void red_display_reset_send_data(DisplayChannelClient *dcc)
 {
-    red_display_reset_compress_buf(dcc);
     dcc->send_data.free_list.res->count = 0;
     dcc->send_data.num_pixmap_cache_items = 0;
     memset(dcc->send_data.free_list.sync, 0, sizeof(dcc->send_data.free_list.sync));
@@ -7199,14 +7142,10 @@ static void display_channel_client_on_disconnect(RedChannelClient *rcc)
     red_release_glz(dcc);
     red_reset_palette_cache(dcc);
     free(dcc->send_data.stream_outbuf);
-    red_display_reset_compress_buf(dcc);
     free(dcc->send_data.free_list.res);
     dcc_destroy_stream_agents(dcc);
 
     // this was the last channel client
-    if (!red_channel_is_connected(rcc->channel)) {
-        red_display_destroy_compress_bufs(display);
-    }
     spice_debug("#draw=%d, #red_draw=%d, #glz_draw=%d",
                 display->drawable_count, worker->red_drawable_count,
                 worker->glz_drawable_count);
