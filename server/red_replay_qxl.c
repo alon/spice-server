@@ -185,13 +185,15 @@ static replay_t read_binary(SpiceReplay *replay, const char *prefix, size_t *siz
                             **buf, size_t base_size)
 {
     char template[1024];
-    int with_zlib;
+    int with_zlib = -1;
     int zlib_size;
     uint8_t *zlib_buffer;
     z_stream strm;
 
     snprintf(template, sizeof(template), "binary %%d %s %%ld:", prefix);
-    replay_fscanf(replay, template, &with_zlib, size);
+    if (replay_fscanf(replay, template, &with_zlib, size) == REPLAY_EOF)
+        return REPLAY_EOF;
+
     if (*buf == NULL) {
         *buf = malloc(*size + base_size);
         if (*buf == NULL) {
@@ -206,6 +208,7 @@ static replay_t read_binary(SpiceReplay *replay, const char *prefix, size_t *siz
         hexdump(*buf + base_size, *size);
     }
 #else
+    spice_return_val_if_fail(with_zlib != -1, REPLAY_EOF);
     if (with_zlib) {
         int ret;
 
