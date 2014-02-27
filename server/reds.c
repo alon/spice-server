@@ -3255,7 +3255,7 @@ static int do_spice_init(SpiceCoreInterface *core_interface)
 
     reds->allow_multiple_clients = getenv(SPICE_DEBUG_ALLOW_MC_ENV) != NULL;
     if (reds->allow_multiple_clients) {
-        spice_warning("spice: allowing multiple client connections (crashy)");
+        spice_warning("spice: allowing multiple client connections");
     }
     atexit(reds_exit);
     return 0;

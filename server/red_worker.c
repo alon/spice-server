@@ -194,7 +194,7 @@ static int red_process_cursor(RedWorker *worker, uint32_t max_pipe_size, int *ri
 
     *ring_is_empty = FALSE;
     while (!cursor_is_connected(worker) ||
-           red_channel_min_pipe_size(RED_CHANNEL(worker->cursor_channel)) <= max_pipe_size) {
+           red_channel_max_pipe_size(RED_CHANNEL(worker->cursor_channel)) <= max_pipe_size) {
         if (!worker->qxl->st->qif->get_cursor_command(worker->qxl, &ext_cmd)) {
             *ring_is_empty = TRUE;
             if (worker->cursor_poll_tries < CMD_RING_POLL_RETRIES) {
@@ -282,10 +282,10 @@ static int red_process_display(RedWorker *worker, uint32_t max_pipe_size, int *r
                 return n;
             }
 
-
-            // TODO: change to average pipe size?
+            /* this is safe but slow. in the future client groups will rule the world, and
+             * dial up will live with T1 pipes in harmony */
             if (red_channel_min_pipe_size(RED_CHANNEL(worker->display_channel)) > max_pipe_size) {
-                spice_info("too much item in the display clients pipe already");
+                spice_info("too many items in the display clients pipe already");
                 return n;
             }
         }
