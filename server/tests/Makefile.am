@@ -40,6 +40,7 @@ noinst_PROGRAMS =						\
 	test_two_servers					\
 	test_vdagent						\
 	test_display_width_stride			\
+	replay								\
 	$(NULL)
 
 test_vdagent_SOURCES =		\
@@ -100,4 +101,12 @@ test_display_width_stride_SOURCES =			\
 	test_display_base.c			\
 	test_display_base.h			\
 	test_display_width_stride.c 			\
+	$(NULL)
+
+replay_SOURCES = 		\
+	replay.c			\
+	test_display_base.h	\
+	basic_event_loop.c	\
+	basic_event_loop.h	\
+	test_util.h			\
 	$(NULL)
