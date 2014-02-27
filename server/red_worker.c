@@ -547,6 +547,7 @@ typedef struct RedWorker {
     int set_client_capabilities_pending;
 
     FILE *record_fd;
+    bool wait_for_clients;
 } RedWorker;
 
 typedef enum {
@@ -4001,7 +4002,7 @@ static int red_process_commands(RedWorker *worker, uint32_t max_pipe_size, int *
     *ring_is_empty = FALSE;
     for (;;) {
 
-        if (display_is_connected(worker)) {
+        if (display_is_connected(worker) && worker->wait_for_clients) {
 
             if (red_channel_all_blocked(RED_CHANNEL(worker->display_channel))) {
                 spice_info("all display clients are blocking");
@@ -10603,6 +10604,8 @@ RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher)
     worker->cursor_channel = cursor_channel_new(worker);
     // TODO: handle seemless migration. Temp, setting migrate to FALSE
     display_channel_create(worker, FALSE);
+
+    worker->wait_for_clients = !g_getenv("SPICE_NOWAIT_CLIENTS");
 
     return worker;
 }
