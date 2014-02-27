@@ -854,7 +854,7 @@ Test *test_new(SpiceCoreInterface *core)
 
     test->core = core;
     test->server = server;
-    test->wakeup_ms = 50;
+    test->wakeup_ms = 1;
     test->cursor_notify = NOTIFY_CURSOR_BATCH;
     // some common initialization for all display tests
     printf("TESTER: listening on port %d (unsecure)\n", port);
