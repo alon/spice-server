@@ -755,6 +755,9 @@ static inline void __validate_surface(RedWorker *worker, uint32_t surface_id)
 
 static inline int validate_surface(RedWorker *worker, uint32_t surface_id)
 {
+    if (surface_id == G_MAXUINT32)
+        return 1;
+
     spice_warn_if(surface_id >= worker->n_surfaces);
     if (!worker->surfaces[surface_id].context.canvas) {
         spice_warning("canvas address is %p for %d (and is NULL)\n",
