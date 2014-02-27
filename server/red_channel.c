@@ -2436,3 +2436,12 @@ int red_channel_wait_all_sent(RedChannel *channel,
         return TRUE;
     }
 }
+
+void red_channel_client_disconnect_if_pending_send(RedChannelClient *rcc)
+{
+    if (red_channel_client_blocked(rcc) || rcc->pipe_size > 0) {
+        red_channel_client_disconnect(rcc);
+    } else {
+        spice_assert(red_channel_client_no_item_being_sent(rcc));
+    }
+}
