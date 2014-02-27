@@ -271,35 +271,21 @@ double inline stat_byte_to_mega(uint64_t size)
 #define MAX_EVENT_SOURCES 20
 
 enum {
-    BUF_TYPE_RAW = 1,
-};
-
-enum {
-    PIPE_ITEM_TYPE_DRAW = PIPE_ITEM_TYPE_CHANNEL_BASE,
-    PIPE_ITEM_TYPE_INVAL_ONE,
-    PIPE_ITEM_TYPE_CURSOR,
-    PIPE_ITEM_TYPE_CURSOR_INIT,
+    PIPE_ITEM_TYPE_DRAW = PIPE_ITEM_TYPE_COMMON_LAST,
     PIPE_ITEM_TYPE_IMAGE,
     PIPE_ITEM_TYPE_STREAM_CREATE,
     PIPE_ITEM_TYPE_STREAM_CLIP,
     PIPE_ITEM_TYPE_STREAM_DESTROY,
     PIPE_ITEM_TYPE_UPGRADE,
-    PIPE_ITEM_TYPE_VERB,
     PIPE_ITEM_TYPE_MIGRATE_DATA,
     PIPE_ITEM_TYPE_PIXMAP_SYNC,
     PIPE_ITEM_TYPE_PIXMAP_RESET,
-    PIPE_ITEM_TYPE_INVAL_CURSOR_CACHE,
     PIPE_ITEM_TYPE_INVAL_PALLET_CACHE,
     PIPE_ITEM_TYPE_CREATE_SURFACE,
     PIPE_ITEM_TYPE_DESTROY_SURFACE,
     PIPE_ITEM_TYPE_MONITORS_CONFIG,
     PIPE_ITEM_TYPE_STREAM_ACTIVATE_REPORT,
 };
-
-typedef struct VerbItem {
-    PipeItem base;
-    uint16_t verb;
-} VerbItem;
 
 #define MAX_LZ_ENCODERS MAX_CACHE_CLIENTS
 
@@ -648,17 +634,8 @@ typedef struct RedWorker {
 
     uint32_t bits_unique;
 
-    CursorItem *cursor;
-    int cursor_visible;
-    SpicePoint16 cursor_position;
-    uint16_t cursor_trail_length;
-    uint16_t cursor_trail_frequency;
-
     _Drawable drawables[NUM_DRAWABLES];
     _Drawable *free_drawables;
-
-    _CursorItem cursor_items[NUM_CURSORS];
-    _CursorItem *free_cursor_items;
 
     RedMemSlotInfo mem_slots;
 
@@ -669,8 +646,6 @@ typedef struct RedWorker {
     spice_image_compression_t image_compression;
     spice_wan_compression_t jpeg_state;
     spice_wan_compression_t zlib_glz_state;
-
-    uint32_t mouse_mode;
 
     uint32_t streaming_video;
     Stream streams_buf[NUM_STREAMS];
@@ -740,7 +715,6 @@ static void red_update_area(RedWorker *worker, const SpiceRect *area, int surfac
 static void red_update_area_till(RedWorker *worker, const SpiceRect *area, int surface_id,
                                  Drawable *last);
 #endif
-static void red_release_cursor(RedWorker *worker, CursorItem *cursor);
 static inline void release_drawable(RedWorker *worker, Drawable *item);
 static void red_display_release_stream(RedWorker *worker, StreamAgent *agent);
 static inline void red_detach_stream(RedWorker *worker, Stream *stream, int detach_sized);
@@ -759,16 +733,11 @@ static ImageItem *red_add_surface_area_image(DisplayChannelClient *dcc, int surf
 static BitmapGradualType _get_bitmap_graduality_level(RedWorker *worker, SpiceBitmap *bitmap,
                                                       uint32_t group_id);
 static inline int _stride_is_extra(SpiceBitmap *bitmap);
-static void red_disconnect_cursor(RedChannel *channel);
+
 static void display_channel_client_release_item_before_push(DisplayChannelClient *dcc,
                                                             PipeItem *item);
 static void display_channel_client_release_item_after_push(DisplayChannelClient *dcc,
                                                            PipeItem *item);
-static void cursor_channel_client_release_item_before_push(CursorChannelClient *ccc,
-                                                           PipeItem *item);
-static void cursor_channel_client_release_item_after_push(CursorChannelClient *ccc,
-                                                          PipeItem *item);
-
 static void red_push_monitors_config(DisplayChannelClient *dcc);
 
 /*
@@ -776,21 +745,6 @@ static void red_push_monitors_config(DisplayChannelClient *dcc);
  * The two collections we iterate over:
  *  given a channel, iterate over it's clients
  */
-
-/* a generic safe for loop macro  */
-#define SAFE_FOREACH(link, next, cond, ring, data, get_data)               \
-    for ((((link) = ((cond) ? ring_get_head(ring) : NULL)), \
-          ((next) = ((link) ? ring_next((ring), (link)) : NULL)),          \
-          ((data) = ((link)? (get_data) : NULL)));                         \
-         (link);                                                           \
-         (((link) = (next)),                                               \
-          ((next) = ((link) ? ring_next((ring), (link)) : NULL)),          \
-          ((data) = ((link)? (get_data) : NULL))))
-
-#define LINK_TO_RCC(ptr) SPICE_CONTAINEROF(ptr, RedChannelClient, channel_link)
-#define RCC_FOREACH_SAFE(link, next, rcc, channel) \
-    SAFE_FOREACH(link, next, channel,  &(channel)->clients, rcc, LINK_TO_RCC(link))
-
 
 #define LINK_TO_DCC(ptr) SPICE_CONTAINEROF(ptr, DisplayChannelClient,  \
                                       common.base.channel_link)
@@ -827,7 +781,6 @@ static void red_push_monitors_config(DisplayChannelClient *dcc);
                                          DisplayChannel, common.base)
 
 #define RCC_TO_DCC(rcc) SPICE_CONTAINEROF((rcc), DisplayChannelClient, common.base)
-#define RCC_TO_CCC(rcc) SPICE_CONTAINEROF((rcc), CursorChannelClient, common.base)
 
 
 
@@ -908,6 +861,13 @@ static void print_compress_stats(DisplayChannel *display_channel)
 }
 
 #endif
+
+QXLInstance* red_worker_get_qxl(RedWorker *worker)
+{
+    spice_return_val_if_fail(worker != NULL, NULL);
+
+    return worker->qxl;
+}
 
 static MonitorsConfig *monitors_config_getref(MonitorsConfig *monitors_config)
 {
@@ -1039,32 +999,8 @@ static void show_draw_item(RedWorker *worker, DrawItem *draw_item, const char *p
            draw_item->base.rgn.extents.y2);
 }
 
-static inline int pipe_item_is_linked(PipeItem *item)
-{
-    return ring_item_is_linked(&item->link);
-}
-
-static void red_pipe_add_verb(RedChannelClient* rcc, uint16_t verb)
-{
-    VerbItem *item = spice_new(VerbItem, 1);
-
-    red_channel_pipe_item_init(rcc->channel, &item->base, PIPE_ITEM_TYPE_VERB);
-    item->verb = verb;
-    red_channel_client_pipe_add(rcc, &item->base);
-}
-
 static inline void red_create_surface_item(DisplayChannelClient *dcc, int surface_id);
 static void red_push_surface_image(DisplayChannelClient *dcc, int surface_id);
-
-static void red_pipes_add_verb(RedChannel *channel, uint16_t verb)
-{
-    RedChannelClient *rcc;
-    RingItem *link, *next;
-
-    RCC_FOREACH_SAFE(link, next, rcc, channel) {
-        red_pipe_add_verb(rcc, verb);
-    }
-}
 
 static inline void red_handle_drawable_surfaces_client_synced(
                         DisplayChannelClient *dcc, Drawable *drawable)
@@ -1298,10 +1234,6 @@ static void common_release_recv_buf(RedChannelClient *rcc, uint16_t type, uint32
     }
 }
 
-#define CLIENT_CURSOR_CACHE
-#include "cache_item.tmpl.c"
-#undef CLIENT_CURSOR_CACHE
-
 #define CLIENT_PALETTE_CACHE
 #include "cache_item.tmpl.c"
 #undef CLIENT_PALETTE_CACHE
@@ -1309,11 +1241,6 @@ static void common_release_recv_buf(RedChannelClient *rcc, uint16_t type, uint32
 static void red_reset_palette_cache(DisplayChannelClient *dcc)
 {
     red_palette_cache_reset(dcc, CLIENT_PALETTE_CACHE_SIZE);
-}
-
-static void red_reset_cursor_cache(RedChannelClient *rcc)
-{
-    red_cursor_cache_reset(RCC_TO_CCC(rcc), CLIENT_CURSOR_CACHE_SIZE);
 }
 
 static inline Drawable *alloc_drawable(RedWorker *worker)
@@ -4467,153 +4394,6 @@ static void red_update_area(RedWorker *worker, const SpiceRect *area, int surfac
 #endif
 #endif
 
-static inline void free_cursor_item(RedWorker *worker, CursorItem *item);
-
-static void red_release_cursor(RedWorker *worker, CursorItem *cursor)
-{
-    if (!--cursor->refs) {
-        QXLReleaseInfoExt release_info_ext;
-        RedCursorCmd *cursor_cmd;
-
-        cursor_cmd = cursor->red_cursor;
-        release_info_ext.group_id = cursor->group_id;
-        release_info_ext.info = cursor_cmd->release_info;
-        worker->qxl->st->qif->release_resource(worker->qxl, release_info_ext);
-        free_cursor_item(worker, cursor);
-        red_put_cursor_cmd(cursor_cmd);
-        free(cursor_cmd);
-    }
-}
-
-static void red_set_cursor(RedWorker *worker, CursorItem *cursor)
-{
-    if (worker->cursor) {
-        red_release_cursor(worker, worker->cursor);
-    }
-    ++cursor->refs;
-    worker->cursor = cursor;
-}
-
-#ifdef DEBUG_CURSORS
-static int _cursor_count = 0;
-#endif
-
-static inline CursorItem *alloc_cursor_item(RedWorker *worker)
-{
-    CursorItem *cursor;
-
-    if (!worker->free_cursor_items) {
-        return NULL;
-    }
-#ifdef DEBUG_CURSORS
-    --_cursor_count;
-#endif
-    cursor = &worker->free_cursor_items->u.cursor_item;
-    worker->free_cursor_items = worker->free_cursor_items->u.next;
-    return cursor;
-}
-
-static inline void free_cursor_item(RedWorker *worker, CursorItem *item)
-{
-    ((_CursorItem *)item)->u.next = worker->free_cursor_items;
-    worker->free_cursor_items = (_CursorItem *)item;
-#ifdef DEBUG_CURSORS
-    ++_cursor_count;
-    spice_assert(_cursor_count <= NUM_CURSORS);
-#endif
-}
-
-static void cursor_items_init(RedWorker *worker)
-{
-    int i;
-
-    worker->free_cursor_items = NULL;
-    for (i = 0; i < NUM_CURSORS; i++) {
-        free_cursor_item(worker, &worker->cursor_items[i].u.cursor_item);
-    }
-}
-
-static CursorItem *get_cursor_item(RedWorker *worker, RedCursorCmd *cmd, uint32_t group_id)
-{
-    CursorItem *cursor_item;
-
-    spice_warn_if(!(cursor_item = alloc_cursor_item(worker)));
-
-    cursor_item->refs = 1;
-    cursor_item->group_id = group_id;
-    cursor_item->red_cursor = cmd;
-
-    return cursor_item;
-}
-
-static CursorPipeItem *ref_cursor_pipe_item(CursorPipeItem *item)
-{
-    spice_assert(item);
-    item->refs++;
-    return item;
-}
-
-static PipeItem *new_cursor_pipe_item(RedChannelClient *rcc, void *data, int num)
-{
-    CursorPipeItem *item = spice_malloc0(sizeof(CursorPipeItem));
-
-    red_channel_pipe_item_init(rcc->channel, &item->base, PIPE_ITEM_TYPE_CURSOR);
-    item->refs = 1;
-    item->cursor_item = data;
-    item->cursor_item->refs++;
-    return &item->base;
-}
-
-static void put_cursor_pipe_item(CursorChannelClient *ccc, CursorPipeItem *pipe_item)
-{
-    spice_assert(pipe_item);
-
-    if (--pipe_item->refs) {
-        return;
-    }
-
-    spice_assert(!pipe_item_is_linked(&pipe_item->base));
-
-    red_release_cursor(ccc->common.worker, pipe_item->cursor_item);
-    free(pipe_item);
-}
-
-static void qxl_process_cursor(RedWorker *worker, RedCursorCmd *cursor_cmd, uint32_t group_id)
-{
-    CursorItem *cursor_item;
-    int cursor_show = FALSE;
-
-    cursor_item = get_cursor_item(worker, cursor_cmd, group_id);
-
-    switch (cursor_cmd->type) {
-    case QXL_CURSOR_SET:
-        worker->cursor_visible = cursor_cmd->u.set.visible;
-        red_set_cursor(worker, cursor_item);
-        break;
-    case QXL_CURSOR_MOVE:
-        cursor_show = !worker->cursor_visible;
-        worker->cursor_visible = TRUE;
-        worker->cursor_position = cursor_cmd->u.position;
-        break;
-    case QXL_CURSOR_HIDE:
-        worker->cursor_visible = FALSE;
-        break;
-    case QXL_CURSOR_TRAIL:
-        worker->cursor_trail_length = cursor_cmd->u.trail.length;
-        worker->cursor_trail_frequency = cursor_cmd->u.trail.frequency;
-        break;
-    default:
-        spice_error("invalid cursor command %u", cursor_cmd->type);
-    }
-
-    if (cursor_is_connected(worker) && (worker->mouse_mode == SPICE_MOUSE_MODE_SERVER ||
-                                   cursor_cmd->type != QXL_CURSOR_MOVE || cursor_show)) {
-        red_channel_pipes_new_add(&worker->cursor_channel->common.base, new_cursor_pipe_item,
-                                  (void*)cursor_item);
-    }
-    red_release_cursor(worker, cursor_item);
-}
-
 static int red_process_cursor(RedWorker *worker, uint32_t max_pipe_size, int *ring_is_empty)
 {
     QXLCommandExt ext_cmd;
@@ -4653,12 +4433,11 @@ static int red_process_cursor(RedWorker *worker, uint32_t max_pipe_size, int *ri
                 free(cursor);
                 break;
             }
-
-            qxl_process_cursor(worker, cursor, ext_cmd.group_id);
+            cursor_channel_process_cmd(worker->cursor_channel, cursor, ext_cmd.group_id);
             break;
         }
         default:
-            spice_error("bad command type");
+            spice_warning("bad command type");
         }
         n++;
     }
@@ -4962,12 +4741,6 @@ static void red_push_surface_image(DisplayChannelClient *dcc, int surface_id)
     red_channel_client_push(&dcc->common.base);
 }
 
-typedef struct {
-    uint32_t type;
-    void *data;
-    uint32_t size;
-} AddBufInfo;
-
 static void marshaller_add_compressed(SpiceMarshaller *m,
                                       RedCompressBuf *comp_buf, size_t size)
 {
@@ -4982,15 +4755,13 @@ static void marshaller_add_compressed(SpiceMarshaller *m,
     } while (max);
 }
 
-
-static void add_buf_from_info(SpiceMarshaller *m, AddBufInfo *info)
+static inline void fill_rects_clip(SpiceMarshaller *m, SpiceClipRects *data)
 {
-    if (info->data) {
-        switch (info->type) {
-        case BUF_TYPE_RAW:
-            spice_marshaller_add_ref(m, info->data, info->size);
-            break;
-        }
+    int i;
+
+    spice_marshaller_add_uint32(m, data->num_rects);
+    for (i = 0; i < data->num_rects; i++) {
+        spice_marshall_Rect(m, data->rects + i);
     }
 }
 
@@ -6574,37 +6345,6 @@ static void fill_attr(SpiceMarshaller *m, SpiceLineAttr *attr, uint32_t group_id
         for (i = 0 ; i < attr->style_nseg; i++) {
             spice_marshaller_add_uint32(m, attr->style[i]);
         }
-    }
-}
-
-static void fill_cursor(CursorChannelClient *ccc, SpiceCursor *red_cursor,
-                        CursorItem *cursor, AddBufInfo *addbuf)
-{
-    RedCursorCmd *cursor_cmd;
-    addbuf->data = NULL;
-
-    if (!cursor) {
-        red_cursor->flags = SPICE_CURSOR_FLAGS_NONE;
-        return;
-    }
-
-    cursor_cmd = cursor->red_cursor;
-    *red_cursor = cursor_cmd->u.set.shape;
-
-    if (red_cursor->header.unique) {
-        if (red_cursor_cache_find(ccc, red_cursor->header.unique)) {
-            red_cursor->flags |= SPICE_CURSOR_FLAGS_FROM_CACHE;
-            return;
-        }
-        if (red_cursor_cache_add(ccc, red_cursor->header.unique, 1)) {
-            red_cursor->flags |= SPICE_CURSOR_FLAGS_CACHE_ME;
-        }
-    }
-
-    if (red_cursor->data_size) {
-        addbuf->type = BUF_TYPE_RAW;
-        addbuf->data = red_cursor->data;
-        addbuf->size = red_cursor->data_size;
     }
 }
 
@@ -8363,23 +8103,6 @@ static inline void marshall_qxl_drawable(RedChannelClient *rcc,
         red_lossy_marshall_qxl_drawable(display_channel->common.worker, rcc, m, dpi);
 }
 
-static inline void red_marshall_verb(RedChannelClient *rcc, uint16_t verb)
-{
-    spice_assert(rcc);
-    red_channel_client_init_send_data(rcc, verb, NULL);
-}
-
-static inline void red_marshall_inval(RedChannelClient *rcc,
-        SpiceMarshaller *base_marshaller, CacheItem *cach_item)
-{
-    SpiceMsgDisplayInvalOne inval_one;
-
-    red_channel_client_init_send_data(rcc, cach_item->inval_type, NULL);
-    inval_one.id = *(uint64_t *)&cach_item->id;
-
-    spice_marshall_msg_cursor_inval_one(base_marshaller, &inval_one);
-}
-
 static void display_channel_marshall_migrate_data_surfaces(DisplayChannelClient *dcc,
                                                            SpiceMarshaller *m,
                                                            int lossy)
@@ -8745,92 +8468,7 @@ static void red_display_marshall_stream_end(RedChannelClient *rcc,
     spice_marshall_msg_display_stream_destroy(base_marshaller, &destroy);
 }
 
-static void red_cursor_marshall_inval(RedChannelClient *rcc,
-                SpiceMarshaller *m, CacheItem *cach_item)
-{
-    spice_assert(rcc);
-    red_marshall_inval(rcc, m, cach_item);
-}
-
-static void red_marshall_cursor_init(RedChannelClient *rcc, SpiceMarshaller *base_marshaller,
-                                     PipeItem *pipe_item)
-{
-    CursorChannel *cursor_channel;
-    CursorChannelClient *ccc = RCC_TO_CCC(rcc);
-    RedWorker *worker;
-    SpiceMsgCursorInit msg;
-    AddBufInfo info;
-
-    spice_assert(rcc);
-    cursor_channel = SPICE_CONTAINEROF(rcc->channel, CursorChannel, common.base);
-    worker = cursor_channel->common.worker;
-
-    red_channel_client_init_send_data(rcc, SPICE_MSG_CURSOR_INIT, NULL);
-    msg.visible = worker->cursor_visible;
-    msg.position = worker->cursor_position;
-    msg.trail_length = worker->cursor_trail_length;
-    msg.trail_frequency = worker->cursor_trail_frequency;
-
-    fill_cursor(ccc, &msg.cursor, worker->cursor, &info);
-    spice_marshall_msg_cursor_init(base_marshaller, &msg);
-    add_buf_from_info(base_marshaller, &info);
-}
-
-static void red_marshall_cursor(RedChannelClient *rcc,
-                   SpiceMarshaller *m, CursorPipeItem *cursor_pipe_item)
-{
-    CursorChannel *cursor_channel = SPICE_CONTAINEROF(rcc->channel, CursorChannel, common.base);
-    CursorChannelClient *ccc = RCC_TO_CCC(rcc);
-    CursorItem *cursor = cursor_pipe_item->cursor_item;
-    PipeItem *pipe_item = &cursor_pipe_item->base;
-    RedCursorCmd *cmd;
-    RedWorker *worker;
-
-    spice_assert(cursor_channel);
-
-    worker = cursor_channel->common.worker;
-
-    cmd = cursor->red_cursor;
-    switch (cmd->type) {
-    case QXL_CURSOR_MOVE:
-        {
-            SpiceMsgCursorMove cursor_move;
-            red_channel_client_init_send_data(rcc, SPICE_MSG_CURSOR_MOVE, pipe_item);
-            cursor_move.position = cmd->u.position;
-            spice_marshall_msg_cursor_move(m, &cursor_move);
-            break;
-        }
-    case QXL_CURSOR_SET:
-        {
-            SpiceMsgCursorSet cursor_set;
-            AddBufInfo info;
-
-            red_channel_client_init_send_data(rcc, SPICE_MSG_CURSOR_SET, pipe_item);
-            cursor_set.position = cmd->u.set.position;
-            cursor_set.visible = worker->cursor_visible;
-
-            fill_cursor(ccc, &cursor_set.cursor, cursor, &info);
-            spice_marshall_msg_cursor_set(m, &cursor_set);
-            add_buf_from_info(m, &info);
-            break;
-        }
-    case QXL_CURSOR_HIDE:
-        red_channel_client_init_send_data(rcc, SPICE_MSG_CURSOR_HIDE, pipe_item);
-        break;
-    case QXL_CURSOR_TRAIL:
-        {
-            SpiceMsgCursorTrail cursor_trail;
-
-            red_channel_client_init_send_data(rcc, SPICE_MSG_CURSOR_TRAIL, pipe_item);
-            cursor_trail.length = cmd->u.trail.length;
-            cursor_trail.frequency = cmd->u.trail.frequency;
-            spice_marshall_msg_cursor_trail(m, &cursor_trail);
-        }
-        break;
-    default:
-        spice_error("bad cursor command %d", cmd->type);
-    }
-}
+#define RCC_TO_CCC(rcc) SPICE_CONTAINEROF((rcc), CursorChannelClient, common.base)
 
 static void red_marshall_surface_create(RedChannelClient *rcc,
     SpiceMarshaller *base_marshaller, SpiceMsgSurfaceCreate *surface_create)
@@ -8912,9 +8550,6 @@ static void display_channel_send_item(RedChannelClient *rcc, PipeItem *pipe_item
         marshall_qxl_drawable(rcc, m, dpi);
         break;
     }
-    case PIPE_ITEM_TYPE_INVAL_ONE:
-        red_marshall_inval(rcc, m, (CacheItem *)pipe_item);
-        break;
     case PIPE_ITEM_TYPE_STREAM_CREATE: {
         StreamAgent *agent = SPICE_CONTAINEROF(pipe_item, StreamAgent, create_item);
         red_display_marshall_stream_start(rcc, m, agent);
@@ -8934,7 +8569,7 @@ static void display_channel_send_item(RedChannelClient *rcc, PipeItem *pipe_item
         red_display_marshall_upgrade(rcc, m, (UpgradeItem *)pipe_item);
         break;
     case PIPE_ITEM_TYPE_VERB:
-        red_marshall_verb(rcc, ((VerbItem*)pipe_item)->verb);
+        red_marshall_verb(rcc, (VerbItem*)pipe_item);
         break;
     case PIPE_ITEM_TYPE_MIGRATE_DATA:
         display_channel_marshall_migrate_data(rcc, m);
@@ -8950,7 +8585,7 @@ static void display_channel_send_item(RedChannelClient *rcc, PipeItem *pipe_item
         break;
     case PIPE_ITEM_TYPE_INVAL_PALLET_CACHE:
         red_reset_palette_cache(dcc);
-        red_marshall_verb(rcc, SPICE_MSG_DISPLAY_INVAL_ALL_PALETTES);
+        red_channel_client_init_send_data(rcc, SPICE_MSG_DISPLAY_INVAL_ALL_PALETTES, NULL);
         break;
     case PIPE_ITEM_TYPE_CREATE_SURFACE: {
         SurfaceCreateItem *surface_create = SPICE_CONTAINEROF(pipe_item, SurfaceCreateItem,
@@ -8987,37 +8622,6 @@ static void display_channel_send_item(RedChannelClient *rcc, PipeItem *pipe_item
     if (red_channel_client_send_message_pending(rcc)) {
         display_begin_send_message(rcc);
     }
-}
-
-static void cursor_channel_send_item(RedChannelClient *rcc, PipeItem *pipe_item)
-{
-    SpiceMarshaller *m = red_channel_client_get_marshaller(rcc);
-    CursorChannelClient *ccc = RCC_TO_CCC(rcc);
-
-    switch (pipe_item->type) {
-    case PIPE_ITEM_TYPE_CURSOR:
-        red_marshall_cursor(rcc, m, SPICE_CONTAINEROF(pipe_item, CursorPipeItem, base));
-        break;
-    case PIPE_ITEM_TYPE_INVAL_ONE:
-        red_cursor_marshall_inval(rcc, m, (CacheItem *)pipe_item);
-        break;
-    case PIPE_ITEM_TYPE_VERB:
-        red_marshall_verb(rcc, ((VerbItem*)pipe_item)->verb);
-        break;
-    case PIPE_ITEM_TYPE_CURSOR_INIT:
-        red_reset_cursor_cache(rcc);
-        red_marshall_cursor_init(rcc, m, pipe_item);
-        break;
-    case PIPE_ITEM_TYPE_INVAL_CURSOR_CACHE:
-        red_reset_cursor_cache(rcc);
-        red_marshall_verb(rcc, SPICE_MSG_CURSOR_INVAL_ALL);
-        break;
-    default:
-        spice_error("invalid pipe item type");
-    }
-
-    cursor_channel_client_release_item_before_push(ccc, pipe_item);
-    red_channel_client_begin_send_message(rcc);
 }
 
 static inline void red_push(RedWorker *worker)
@@ -9464,7 +9068,8 @@ static inline void flush_cursor_commands(RedWorker *worker)
             red_channel_send(channel);
             if (red_now() >= end_time) {
                 spice_warning("flush cursor timeout");
-                red_disconnect_cursor(channel);
+                cursor_channel_disconnect(worker->cursor_channel);
+                worker->cursor_channel = NULL;
             } else {
                 sleep_count++;
                 usleep(DISPLAY_CLIENT_RETRY_INTERVAL);
@@ -10130,16 +9735,16 @@ static const SpiceCoreInterface worker_core = {
     .watch_remove = worker_watch_remove,
 };
 
-static CommonChannelClient *common_channel_client_create(int size,
-                                                         CommonChannel *common,
-                                                         RedClient *client,
-                                                         RedsStream *stream,
-                                                         int mig_target,
-                                                         int monitor_latency,
-                                                         uint32_t *common_caps,
-                                                         int num_common_caps,
-                                                         uint32_t *caps,
-                                                         int num_caps)
+CommonChannelClient *common_channel_new_client(CommonChannel *common,
+                                               int size,
+                                               RedClient *client,
+                                               RedsStream *stream,
+                                               int mig_target,
+                                               int monitor_latency,
+                                               uint32_t *common_caps,
+                                               int num_common_caps,
+                                               uint32_t *caps,
+                                               int num_caps)
 {
     RedChannelClient *rcc =
         red_channel_client_create(size, &common->base, client, stream, monitor_latency,
@@ -10167,8 +9772,8 @@ DisplayChannelClient *display_channel_client_create(CommonChannel *common,
                                                     uint32_t *caps, int num_caps)
 {
     DisplayChannelClient *dcc =
-        (DisplayChannelClient*)common_channel_client_create(
-            sizeof(DisplayChannelClient), common, client, stream,
+        (DisplayChannelClient*)common_channel_new_client(
+            common, sizeof(DisplayChannelClient), client, stream,
             mig_target,
             TRUE,
             common_caps, num_common_caps,
@@ -10182,62 +9787,30 @@ DisplayChannelClient *display_channel_client_create(CommonChannel *common,
     return dcc;
 }
 
-CursorChannelClient *cursor_channel_create_rcc(CommonChannel *common,
-                                               RedClient *client, RedsStream *stream,
-                                               int mig_target,
-                                               uint32_t *common_caps, int num_common_caps,
-                                               uint32_t *caps, int num_caps)
-{
-    CursorChannelClient *ccc =
-        (CursorChannelClient*)common_channel_client_create(
-            sizeof(CursorChannelClient), common, client, stream,
-            mig_target,
-            FALSE,
-            common_caps,
-            num_common_caps,
-            caps,
-            num_caps);
-
-    if (!ccc) {
-        return NULL;
-    }
-    ring_init(&ccc->cursor_cache_lru);
-    ccc->cursor_cache_available = CLIENT_CURSOR_CACHE_SIZE;
-    return ccc;
-}
-
-static RedChannel *__new_channel(RedWorker *worker, int size, uint32_t channel_type,
-                                 int migration_flags,
-                                 channel_disconnect_proc on_disconnect,
-                                 channel_send_pipe_item_proc send_item,
-                                 channel_hold_pipe_item_proc hold_item,
-                                 channel_release_pipe_item_proc release_item,
-                                 channel_handle_parsed_proc handle_parsed,
-                                 channel_handle_migrate_flush_mark_proc handle_migrate_flush_mark,
-                                 channel_handle_migrate_data_proc handle_migrate_data,
-                                 channel_handle_migrate_data_get_serial_proc migrate_get_serial)
+RedChannel *red_worker_new_channel(RedWorker *worker, int size,
+                                   uint32_t channel_type, int migration_flags,
+                                   ChannelCbs *channel_cbs,
+                                   channel_handle_parsed_proc handle_parsed)
 {
     RedChannel *channel = NULL;
     CommonChannel *common;
-    ChannelCbs channel_cbs = { NULL, };
 
-    channel_cbs.config_socket = common_channel_config_socket;
-    channel_cbs.on_disconnect = on_disconnect;
-    channel_cbs.send_item = send_item;
-    channel_cbs.hold_item = hold_item;
-    channel_cbs.release_item = release_item;
-    channel_cbs.alloc_recv_buf = common_alloc_recv_buf;
-    channel_cbs.release_recv_buf = common_release_recv_buf;
-    channel_cbs.handle_migrate_flush_mark = handle_migrate_flush_mark;
-    channel_cbs.handle_migrate_data = handle_migrate_data;
-    channel_cbs.handle_migrate_data_get_serial = migrate_get_serial;
+    spice_return_val_if_fail(worker, NULL);
+    spice_return_val_if_fail(channel_cbs, NULL);
+    spice_return_val_if_fail(!channel_cbs->config_socket, NULL);
+    spice_return_val_if_fail(!channel_cbs->alloc_recv_buf, NULL);
+    spice_return_val_if_fail(!channel_cbs->release_recv_buf, NULL);
+
+    channel_cbs->config_socket = common_channel_config_socket;
+    channel_cbs->alloc_recv_buf = common_alloc_recv_buf;
+    channel_cbs->release_recv_buf = common_release_recv_buf;
 
     channel = red_channel_create_parser(size, &worker_core,
                                         channel_type, worker->id,
                                         TRUE /* handle_acks */,
                                         spice_get_client_channel_parser(channel_type, NULL),
                                         handle_parsed,
-                                        &channel_cbs,
+                                        channel_cbs,
                                         migration_flags);
     common = (CommonChannel *)channel;
     if (!channel) {
@@ -10357,7 +9930,6 @@ static void display_channel_client_release_item_before_push(DisplayChannelClient
         free(item);
         break;
     }
-    case PIPE_ITEM_TYPE_INVAL_ONE:
     case PIPE_ITEM_TYPE_VERB:
     case PIPE_ITEM_TYPE_MIGRATE_DATA:
     case PIPE_ITEM_TYPE_PIXMAP_SYNC:
@@ -10387,25 +9959,26 @@ static void display_channel_release_item(RedChannelClient *rcc, PipeItem *item, 
 static void display_channel_create(RedWorker *worker, int migrate)
 {
     DisplayChannel *display_channel;
+    ChannelCbs cbs = {
+        .on_disconnect = display_channel_client_on_disconnect,
+        .send_item = display_channel_send_item,
+        .hold_item = display_channel_hold_pipe_item,
+        .release_item = display_channel_release_item,
+        .handle_migrate_flush_mark = display_channel_handle_migrate_mark,
+        .handle_migrate_data = display_channel_handle_migrate_data,
+        .handle_migrate_data_get_serial = display_channel_handle_migrate_data_get_serial
+    };
 
     if (worker->display_channel) {
         return;
     }
 
     spice_info("create display channel");
-    if (!(worker->display_channel = (DisplayChannel *)__new_channel(
+    if (!(worker->display_channel = (DisplayChannel *)red_worker_new_channel(
             worker, sizeof(*display_channel),
             SPICE_CHANNEL_DISPLAY,
             SPICE_MIGRATE_NEED_FLUSH | SPICE_MIGRATE_NEED_DATA_TRANSFER,
-            display_channel_client_on_disconnect,
-            display_channel_send_item,
-            display_channel_hold_pipe_item,
-            display_channel_release_item,
-            display_channel_handle_message,
-            display_channel_handle_migrate_mark,
-            display_channel_handle_migrate_data,
-            display_channel_handle_migrate_data_get_serial
-            ))) {
+            &cbs, display_channel_handle_message))) {
         spice_warning("failed to create display channel");
         return;
     }
@@ -10539,129 +10112,6 @@ static void handle_new_display_channel(RedWorker *worker, RedClient *client, Red
     on_new_display_channel_client(dcc);
 }
 
-static void cursor_channel_client_on_disconnect(RedChannelClient *rcc)
-{
-    if (!rcc) {
-        return;
-    }
-    red_reset_cursor_cache(rcc);
-}
-
-static void red_disconnect_cursor(RedChannel *channel)
-{
-    CommonChannel *common;
-
-    if (!channel || !red_channel_is_connected(channel)) {
-        return;
-    }
-    common = SPICE_CONTAINEROF(channel, CommonChannel, base);
-    spice_assert(channel == (RedChannel *)common->worker->cursor_channel);
-    common->worker->cursor_channel = NULL;
-    red_channel_apply_clients(channel, red_reset_cursor_cache);
-    red_channel_disconnect(channel);
-}
-
-static void red_migrate_cursor(RedWorker *worker, RedChannelClient *rcc)
-{
-    if (red_channel_client_is_connected(rcc)) {
-        red_channel_client_pipe_add_type(rcc,
-                                         PIPE_ITEM_TYPE_INVAL_CURSOR_CACHE);
-        red_channel_client_default_migrate(rcc);
-    }
-}
-
-static void on_new_cursor_channel(RedWorker *worker, RedChannelClient *rcc)
-{
-    CursorChannel *channel = worker->cursor_channel;
-
-    spice_assert(channel);
-    red_channel_client_ack_zero_messages_window(rcc);
-    red_channel_client_push_set_ack(rcc);
-    // TODO: why do we check for context.canvas? defer this to after display cc is connected
-    // and test it's canvas? this is just a test to see if there is an active renderer?
-    if (worker->surfaces[0].context.canvas && !channel->common.during_target_migrate) {
-        red_channel_client_pipe_add_type(rcc, PIPE_ITEM_TYPE_CURSOR_INIT);
-    }
-}
-
-static void cursor_channel_hold_pipe_item(RedChannelClient *rcc, PipeItem *item)
-{
-    CursorPipeItem *cursor_pipe_item;
-    spice_assert(item);
-    cursor_pipe_item = SPICE_CONTAINEROF(item, CursorPipeItem, base);
-    ref_cursor_pipe_item(cursor_pipe_item);
-}
-
-// TODO: share code between before/after_push since most of the items need the same
-// release
-static void cursor_channel_client_release_item_before_push(CursorChannelClient *ccc,
-                                                           PipeItem *item)
-{
-    switch (item->type) {
-    case PIPE_ITEM_TYPE_CURSOR: {
-        CursorPipeItem *cursor_pipe_item = SPICE_CONTAINEROF(item, CursorPipeItem, base);
-        put_cursor_pipe_item(ccc, cursor_pipe_item);
-        break;
-    }
-    case PIPE_ITEM_TYPE_INVAL_ONE:
-    case PIPE_ITEM_TYPE_VERB:
-    case PIPE_ITEM_TYPE_CURSOR_INIT:
-    case PIPE_ITEM_TYPE_INVAL_CURSOR_CACHE:
-        free(item);
-        break;
-    default:
-        spice_error("invalid pipe item type");
-    }
-}
-
-static void cursor_channel_client_release_item_after_push(CursorChannelClient *ccc,
-                                                          PipeItem *item)
-{
-    switch (item->type) {
-        case PIPE_ITEM_TYPE_CURSOR: {
-            CursorPipeItem *cursor_pipe_item = SPICE_CONTAINEROF(item, CursorPipeItem, base);
-            put_cursor_pipe_item(ccc, cursor_pipe_item);
-            break;
-        }
-        default:
-            spice_critical("invalid item type");
-    }
-}
-
-static void cursor_channel_release_item(RedChannelClient *rcc, PipeItem *item, int item_pushed)
-{
-    CursorChannelClient *ccc = RCC_TO_CCC(rcc);
-
-    spice_assert(item);
-
-    if (item_pushed) {
-        cursor_channel_client_release_item_after_push(ccc, item);
-    } else {
-        spice_debug("not pushed (%d)", item->type);
-        cursor_channel_client_release_item_before_push(ccc, item);
-    }
-}
-
-static void cursor_channel_create(RedWorker *worker, int migrate)
-{
-    if (worker->cursor_channel != NULL) {
-        return;
-    }
-    spice_info("create cursor channel");
-    worker->cursor_channel = (CursorChannel *)__new_channel(
-        worker, sizeof(*worker->cursor_channel),
-        SPICE_CHANNEL_CURSOR,
-        0,
-        cursor_channel_client_on_disconnect,
-        cursor_channel_send_item,
-        cursor_channel_hold_pipe_item,
-        cursor_channel_release_item,
-        red_channel_client_handle_message,
-        NULL,
-        NULL,
-        NULL);
-}
-
 static void red_connect_cursor(RedWorker *worker, RedClient *client, RedsStream *stream,
                                int migrate,
                                uint32_t *common_caps, int num_common_caps,
@@ -10670,24 +10120,28 @@ static void red_connect_cursor(RedWorker *worker, RedClient *client, RedsStream 
     CursorChannel *channel;
     CursorChannelClient *ccc;
 
-    if (worker->cursor_channel == NULL) {
-        spice_warning("cursor channel was not created");
-        return;
-    }
+    spice_return_if_fail(worker->cursor_channel != NULL);
+
     channel = worker->cursor_channel;
     spice_info("add cursor channel client");
-    ccc = cursor_channel_create_rcc(&channel->common, client, stream,
+    ccc = cursor_channel_client_new(channel, client, stream,
                                     migrate,
                                     common_caps, num_common_caps,
                                     caps, num_caps);
-    if (!ccc) {
-        return;
-    }
+    spice_return_if_fail(ccc != NULL);
 #ifdef RED_STATISTICS
     channel->stat = stat_add_node(worker->stat, "cursor_channel", TRUE);
     channel->common.base.out_bytes_counter = stat_add_counter(channel->stat, "out_bytes", TRUE);
 #endif
-    on_new_cursor_channel(worker, &ccc->common.base);
+
+    RedChannelClient *rcc = &ccc->common.base;
+    red_channel_client_ack_zero_messages_window(rcc);
+    red_channel_client_push_set_ack(rcc);
+    // TODO: why do we check for context.canvas? defer this to after display cc is connected
+    // and test it's canvas? this is just a test to see if there is an active renderer?
+    if (worker->surfaces[0].context.canvas && !channel->common.during_target_migrate) {
+        red_channel_client_pipe_add_type(rcc, PIPE_ITEM_TYPE_CURSOR_INIT);
+    }
 }
 
 typedef struct __attribute__ ((__packed__)) CursorData {
@@ -10850,31 +10304,6 @@ void handle_dev_destroy_surface_wait(void *opaque, uint32_t message_type, void *
     dev_destroy_surface_wait(worker, msg->surface_id);
 }
 
-static inline void red_cursor_reset(RedWorker *worker)
-{
-    if (worker->cursor) {
-        red_release_cursor(worker, worker->cursor);
-        worker->cursor = NULL;
-    }
-
-    worker->cursor_visible = TRUE;
-    worker->cursor_position.x = worker->cursor_position.y = 0;
-    worker->cursor_trail_length = worker->cursor_trail_frequency = 0;
-
-    if (cursor_is_connected(worker)) {
-        red_channel_pipes_add_type(&worker->cursor_channel->common.base,
-                                   PIPE_ITEM_TYPE_INVAL_CURSOR_CACHE);
-        if (!worker->cursor_channel->common.during_target_migrate) {
-            red_pipes_add_verb(&worker->cursor_channel->common.base, SPICE_MSG_CURSOR_RESET);
-        }
-        if (!red_channel_wait_all_sent(&worker->cursor_channel->common.base,
-                                       DISPLAY_CLIENT_TIMEOUT)) {
-            red_channel_apply_clients(&worker->cursor_channel->common.base,
-                               red_channel_client_disconnect_if_pending_send);
-        }
-    }
-}
-
 /* called upon device reset */
 
 /* TODO: split me*/
@@ -10905,7 +10334,7 @@ static inline void dev_destroy_surfaces(RedWorker *worker)
 
     red_display_clear_glz_drawables(worker->display_channel);
 
-    red_cursor_reset(worker);
+    cursor_channel_reset(worker->cursor_channel);
 }
 
 void handle_dev_destroy_surfaces(void *opaque, uint32_t message_type, void *payload)
@@ -11062,10 +10491,9 @@ static void dev_create_primary_surface(RedWorker *worker, uint32_t surface_id,
         red_channel_push(&worker->display_channel->common.base);
     }
 
-    if (cursor_is_connected(worker) && !worker->cursor_channel->common.during_target_migrate) {
+    if (!worker->cursor_channel->common.during_target_migrate)
         red_channel_pipes_add_type(&worker->cursor_channel->common.base,
                                    PIPE_ITEM_TYPE_CURSOR_INIT);
-    }
 }
 
 void handle_dev_create_primary_surface(void *opaque, uint32_t message_type, void *payload)
@@ -11093,7 +10521,7 @@ static void dev_destroy_primary_surface(RedWorker *worker, uint32_t surface_id)
 
     spice_assert(!worker->surfaces[surface_id].context.canvas);
 
-    red_cursor_reset(worker);
+    cursor_channel_reset(worker->cursor_channel);
 }
 
 void handle_dev_destroy_primary_surface(void *opaque, uint32_t message_type, void *payload)
@@ -11263,7 +10691,9 @@ void handle_dev_oom(void *opaque, uint32_t message_type, void *payload)
 
 void handle_dev_reset_cursor(void *opaque, uint32_t message_type, void *payload)
 {
-    red_cursor_reset((RedWorker *)opaque);
+    RedWorker *worker = opaque;
+
+    cursor_channel_reset(worker->cursor_channel);
 }
 
 void handle_dev_reset_image_cache(void *opaque, uint32_t message_type, void *payload)
@@ -11390,8 +10820,12 @@ void handle_dev_cursor_channel_create(void *opaque, uint32_t message_type, void 
     RedWorker *worker = opaque;
     RedChannel *red_channel;
 
-    // TODO: handle seemless migration. Temp, setting migrate to FALSE
-    cursor_channel_create(worker, FALSE);
+    if (!worker->cursor_channel) {
+        worker->cursor_channel = cursor_channel_new(worker);
+    } else {
+        spice_warning("cursor channel already created");
+    }
+
     red_channel = &worker->cursor_channel->common.base;
     xwrite(worker->channel, &red_channel, sizeof(RedChannel *));
 }
@@ -11418,19 +10852,20 @@ void handle_dev_cursor_disconnect(void *opaque, uint32_t message_type, void *pay
     RedChannelClient *rcc = msg->rcc;
 
     spice_info("disconnect cursor client");
-    spice_assert(rcc);
     red_channel_client_disconnect(rcc);
 }
 
 void handle_dev_cursor_migrate(void *opaque, uint32_t message_type, void *payload)
 {
     RedWorkerMessageCursorMigrate *msg = payload;
-    RedWorker *worker = opaque;
     RedChannelClient *rcc = msg->rcc;
 
     spice_info("migrate cursor client");
-    spice_assert(rcc);
-    red_migrate_cursor(worker, rcc);
+    if (!red_channel_client_is_connected(rcc))
+        return;
+
+    red_channel_client_pipe_add_type(rcc, PIPE_ITEM_TYPE_INVAL_CURSOR_CACHE);
+    red_channel_client_default_migrate(rcc);
 }
 
 void handle_dev_set_compression(void *opaque, uint32_t message_type, void *payload)
@@ -11501,8 +10936,10 @@ void handle_dev_set_mouse_mode(void *opaque, uint32_t message_type, void *payloa
     RedWorkerMessageSetMouseMode *msg = payload;
     RedWorker *worker = opaque;
 
-    worker->mouse_mode = msg->mode;
-    spice_info("mouse mode %u", worker->mouse_mode);
+    spice_info("mouse mode %u", msg->mode);
+    spice_return_if_fail(worker->cursor_channel);
+
+    worker->cursor_channel->mouse_mode = msg->mode;
 }
 
 void handle_dev_add_memslot_async(void *opaque, uint32_t message_type, void *payload)
@@ -11539,7 +10976,7 @@ static int loadvm_command(RedWorker *worker, QXLCommandExt *ext)
             free(cursor_cmd);
             return FALSE;
         }
-        qxl_process_cursor(worker, cursor_cmd, ext->group_id);
+        cursor_channel_process_cmd(worker->cursor_channel, cursor_cmd, ext->group_id);
         break;
     case QXL_CMD_SURFACE:
         surface_cmd = spice_new0(RedSurfaceCmd, 1);
@@ -11875,12 +11312,10 @@ RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher)
     worker->qxl = qxl;
     worker->id = qxl->id;
     worker->channel = dispatcher_get_recv_fd(dispatcher);
-    worker->cursor_visible = TRUE;
     spice_assert(num_renderers > 0);
     worker->num_renderers = num_renderers;
     memcpy(worker->renderers, renderers, sizeof(worker->renderers));
     worker->renderer = RED_RENDERER_INVALID;
-    worker->mouse_mode = SPICE_MOUSE_MODE_SERVER;
     worker->image_compression = image_compression;
     worker->jpeg_state = jpeg_state;
     worker->zlib_glz_state = zlib_glz_state;
@@ -11890,7 +11325,6 @@ RedWorker* red_worker_new(QXLInstance *qxl, RedDispatcher *red_dispatcher)
     image_cache_init(&worker->image_cache);
     image_surface_init(worker);
     drawables_init(worker);
-    cursor_items_init(worker);
     red_init_streams(worker);
     stat_init(&worker->add_stat, add_stat_name);
     stat_init(&worker->exclude_stat, exclude_stat_name);
