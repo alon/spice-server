@@ -2,6 +2,7 @@
 # define RED_WORKER_CLIENT_H_
 
 #include "red_worker.h"
+#include "cache_item.h"
 #include "pixmap_cache.h"
 
 typedef int64_t red_time_t;
@@ -18,21 +19,6 @@ typedef struct Drawable Drawable;
 
 #define NUM_STREAMS 50
 #define NUM_SURFACES 10000
-
-typedef struct CacheItem CacheItem;
-
-struct CacheItem {
-    union {
-        PipeItem pipe_data;
-        struct {
-            RingItem lru_link;
-            CacheItem *next;
-        } cache_data;
-    } u;
-    uint64_t id;
-    size_t size;
-    uint32_t inval_type;
-};
 
 #define RED_COMPRESS_BUF_SIZE (1024 * 64)
 typedef struct RedCompressBuf RedCompressBuf;
