@@ -156,6 +156,11 @@ typedef struct PipeItem {
     int type;
 } PipeItem;
 
+static inline int pipe_item_is_linked(PipeItem *item)
+{
+    return ring_item_is_linked(&item->link);
+}
+
 typedef uint8_t *(*channel_alloc_msg_recv_buf_proc)(RedChannelClient *channel,
                                                     uint16_t type, uint32_t size);
 typedef int (*channel_handle_parsed_proc)(RedChannelClient *rcc, uint32_t size, uint16_t type,
@@ -627,5 +632,6 @@ int red_channel_client_wait_outgoing_item(RedChannelClient *rcc,
                                           int64_t timeout);
 int red_channel_wait_all_sent(RedChannel *channel,
                               int64_t timeout);
+void red_channel_client_disconnect_if_pending_send(RedChannelClient *rcc);
 
 #endif

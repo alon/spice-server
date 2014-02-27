@@ -10850,15 +10850,6 @@ void handle_dev_destroy_surface_wait(void *opaque, uint32_t message_type, void *
     dev_destroy_surface_wait(worker, msg->surface_id);
 }
 
-static void rcc_disconnect_if_pending_send(RedChannelClient *rcc)
-{
-    if (red_channel_client_blocked(rcc) || rcc->pipe_size > 0) {
-        red_channel_client_disconnect(rcc);
-    } else {
-        spice_assert(red_channel_client_no_item_being_sent(rcc));
-    }
-}
-
 static inline void red_cursor_reset(RedWorker *worker)
 {
     if (worker->cursor) {
@@ -10879,7 +10870,7 @@ static inline void red_cursor_reset(RedWorker *worker)
         if (!red_channel_wait_all_sent(&worker->cursor_channel->common.base,
                                        DISPLAY_CLIENT_TIMEOUT)) {
             red_channel_apply_clients(&worker->cursor_channel->common.base,
-                                      rcc_disconnect_if_pending_send);
+                               red_channel_client_disconnect_if_pending_send);
         }
     }
 }
@@ -11171,12 +11162,12 @@ void handle_dev_stop(void *opaque, uint32_t message_type, void *payload)
     if (!red_channel_wait_all_sent(&worker->display_channel->common.base,
                                    DISPLAY_CLIENT_TIMEOUT)) {
         red_channel_apply_clients(&worker->display_channel->common.base,
-                                  rcc_disconnect_if_pending_send);
+                                 red_channel_client_disconnect_if_pending_send);
     }
     if (!red_channel_wait_all_sent(&worker->cursor_channel->common.base,
                                    DISPLAY_CLIENT_TIMEOUT)) {
         red_channel_apply_clients(&worker->cursor_channel->common.base,
-                                  rcc_disconnect_if_pending_send);
+                                 red_channel_client_disconnect_if_pending_send);
     }
 }
 
