@@ -12042,5 +12042,6 @@ SPICE_GNUC_NORETURN void *red_worker_main(void *arg)
         }
         red_push(worker);
     }
-    abort();
+
+    spice_warn_if_reached();
 }
