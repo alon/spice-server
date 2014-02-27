@@ -1299,11 +1299,11 @@ static void common_release_recv_buf(RedChannelClient *rcc, uint16_t type, uint32
 }
 
 #define CLIENT_CURSOR_CACHE
-#include "red_client_cache.h"
+#include "cache_item.tmpl.c"
 #undef CLIENT_CURSOR_CACHE
 
 #define CLIENT_PALETTE_CACHE
-#include "red_client_cache.h"
+#include "cache_item.tmpl.c"
 #undef CLIENT_PALETTE_CACHE
 
 static void red_reset_palette_cache(DisplayChannelClient *dcc)
