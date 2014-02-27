@@ -169,6 +169,7 @@ static void red_dispatcher_set_cursor_peer(RedChannel *channel, RedClient *clien
     memcpy(payload.common_caps, common_caps, sizeof(uint32_t)*num_common_caps);
     memcpy(payload.caps, caps, sizeof(uint32_t)*num_caps);
 
+    /* TODO serialize it all, no dangling pointers */
     dispatcher_send_message(&dispatcher->dispatcher,
                             RED_WORKER_MESSAGE_CURSOR_CONNECT,
                             &payload);
